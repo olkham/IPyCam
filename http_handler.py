@@ -57,6 +57,7 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             
             # Detect action from body if header is missing
             if not soap_action:
+                # Device and Media service actions
                 for action in ['GetDeviceInformation', 'GetSystemDateAndTime', 'GetCapabilities',
                               'GetServices', 'GetProfiles', 'GetStreamUri', 'GetSnapshotUri',
                               'GetVideoEncoderConfiguration', 'GetVideoSourceConfiguration',
@@ -64,6 +65,15 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     if action in body:
                         soap_action = action
                         break
+                
+                # PTZ service actions
+                if not soap_action:
+                    for action in ['GetConfigurations', 'GetStatus', 'ContinuousMove', 'Stop',
+                                  'AbsoluteMove', 'RelativeMove', 'GotoHomePosition',
+                                  'GetPresets', 'SetPreset', 'GotoPreset']:
+                        if action in body:
+                            soap_action = action
+                            break
             
             response = self.camera.onvif.handle_action(soap_action, body)
             

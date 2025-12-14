@@ -2,17 +2,23 @@
 """ONVIF Device and Media Service handler"""
 
 import os
+import re
 import time
 import uuid
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
+
 from camera_config import CameraConfig
+
+if TYPE_CHECKING:
+    from ptz_controller import PTZController
 
 
 class ONVIFService:
     """ONVIF Device and Media Service handler"""
     
-    def __init__(self, config: CameraConfig):
+    def __init__(self, config: CameraConfig, ptz_controller: Optional['PTZController'] = None):
         self.config = config
+        self.ptz = ptz_controller
         self.device_uuid = f"urn:uuid:{uuid.uuid4()}"
         self._templates: Dict[str, str] = {}
         self._load_templates()
@@ -51,6 +57,17 @@ class ONVIFService:
             'GetVideoEncoderConfiguration': self.get_video_encoder_configuration,
             'GetVideoSourceConfiguration': self.get_video_source_configuration,
             'GetAudioDecoderConfigurations': self.get_audio_decoder_configurations,
+            # PTZ handlers
+            'GetConfigurations': self.ptz_get_configurations,
+            'GetStatus': lambda: self.ptz_get_status(body),
+            'ContinuousMove': lambda: self.ptz_continuous_move(body),
+            'Stop': lambda: self.ptz_stop(body),
+            'AbsoluteMove': lambda: self.ptz_absolute_move(body),
+            'RelativeMove': lambda: self.ptz_relative_move(body),
+            'GotoHomePosition': lambda: self.ptz_goto_home(body),
+            'GetPresets': lambda: self.ptz_get_presets(body),
+            'SetPreset': lambda: self.ptz_set_preset(body),
+            'GotoPreset': lambda: self.ptz_goto_preset(body),
         }
         
         for key, handler in handlers.items():
@@ -88,13 +105,15 @@ class ONVIFService:
     def get_capabilities(self) -> str:
         device_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/onvif/device_service"
         media_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/onvif/media_service"
-        body = self._render('get_capabilities', device_url=device_url, media_url=media_url)
+        ptz_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/onvif/ptz_service"
+        body = self._render('get_capabilities', device_url=device_url, media_url=media_url, ptz_url=ptz_url)
         return self._wrap_envelope(body)
 
     def get_services(self) -> str:
         device_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/onvif/device_service"
         media_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/onvif/media_service"
-        body = self._render('get_services', device_url=device_url, media_url=media_url)
+        ptz_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/onvif/ptz_service"
+        body = self._render('get_services', device_url=device_url, media_url=media_url, ptz_url=ptz_url)
         return self._wrap_envelope(body)
 
     def get_scopes(self) -> str:
@@ -152,3 +171,216 @@ class ONVIFService:
             device_uuid=self.device_uuid,
             camera_name=self.config.name,
             onvif_url=self.config.onvif_url)
+
+    # === PTZ Service Handlers ===
+    
+    def _extract_xml_value(self, body: str, tag: str) -> Optional[str]:
+        """Extract value from XML tag, handling namespaces"""
+        # Match with or without namespace prefix
+        pattern = rf'<(?:\w+:)?{tag}[^>]*>([^<]*)</(?:\w+:)?{tag}>'
+        match = re.search(pattern, body)
+        return match.group(1) if match else None
+    
+    def _extract_xml_attr(self, body: str, tag: str, attr: str) -> Optional[str]:
+        """Extract attribute value from XML tag"""
+        pattern = rf'<(?:\w+:)?{tag}[^>]*{attr}="([^"]*)"'
+        match = re.search(pattern, body)
+        return match.group(1) if match else None
+    
+    def _extract_velocity(self, body: str) -> tuple:
+        """Extract pan, tilt, zoom velocity from SOAP body"""
+        pan_speed = 0.0
+        tilt_speed = 0.0
+        zoom_speed = 0.0
+        
+        # Look for PanTilt x="..." y="..."
+        pt_match = re.search(r'<(?:\w+:)?PanTilt[^>]*x="([^"]*)"[^>]*y="([^"]*)"', body)
+        if pt_match:
+            try:
+                pan_speed = float(pt_match.group(1))
+                tilt_speed = float(pt_match.group(2))
+            except ValueError:
+                pass
+        
+        # Look for Zoom x="..."
+        zoom_match = re.search(r'<(?:\w+:)?Zoom[^>]*x="([^"]*)"', body)
+        if zoom_match:
+            try:
+                zoom_speed = float(zoom_match.group(1))
+            except ValueError:
+                pass
+        
+        return pan_speed, tilt_speed, zoom_speed
+    
+    def _extract_position(self, body: str) -> tuple:
+        """Extract pan, tilt, zoom position from SOAP body"""
+        pan = None
+        tilt = None
+        zoom = None
+        
+        # Look for Position > PanTilt x="..." y="..."
+        pt_match = re.search(r'<(?:\w+:)?Position[^>]*>.*?<(?:\w+:)?PanTilt[^>]*x="([^"]*)"[^>]*y="([^"]*)"', body, re.DOTALL)
+        if pt_match:
+            try:
+                pan = float(pt_match.group(1))
+                tilt = float(pt_match.group(2))
+            except ValueError:
+                pass
+        
+        # Look for Position > Zoom x="..."
+        zoom_match = re.search(r'<(?:\w+:)?Position[^>]*>.*?<(?:\w+:)?Zoom[^>]*x="([^"]*)"', body, re.DOTALL)
+        if zoom_match:
+            try:
+                zoom = float(zoom_match.group(1))
+            except ValueError:
+                pass
+        
+        return pan, tilt, zoom
+    
+    def _extract_translation(self, body: str) -> tuple:
+        """Extract pan, tilt, zoom translation from SOAP body"""
+        pan = 0.0
+        tilt = 0.0
+        zoom = 0.0
+        
+        # Look for Translation > PanTilt x="..." y="..."
+        pt_match = re.search(r'<(?:\w+:)?Translation[^>]*>.*?<(?:\w+:)?PanTilt[^>]*x="([^"]*)"[^>]*y="([^"]*)"', body, re.DOTALL)
+        if pt_match:
+            try:
+                pan = float(pt_match.group(1))
+                tilt = float(pt_match.group(2))
+            except ValueError:
+                pass
+        
+        # Look for Translation > Zoom x="..."
+        zoom_match = re.search(r'<(?:\w+:)?Translation[^>]*>.*?<(?:\w+:)?Zoom[^>]*x="([^"]*)"', body, re.DOTALL)
+        if zoom_match:
+            try:
+                zoom = float(zoom_match.group(1))
+            except ValueError:
+                pass
+        
+        return pan, tilt, zoom
+
+    def ptz_get_configurations(self) -> str:
+        """Handle GetConfigurations request"""
+        body = self._render('ptz_get_configurations')
+        return self._wrap_envelope(body)
+    
+    def ptz_get_status(self, body: str) -> str:
+        """Handle GetStatus request"""
+        if self.ptz:
+            status = self.ptz.get_status()
+            pan = status['pan']
+            tilt = status['tilt']
+            zoom = status['zoom']
+            moving = 'MOVING' if status['moving'] else 'IDLE'
+        else:
+            pan, tilt, zoom = 0.0, 0.0, 0.0
+            moving = 'IDLE'
+        
+        response = self._render('ptz_get_status',
+            pan=pan, tilt=tilt, zoom=zoom, move_status=moving)
+        return self._wrap_envelope(response)
+    
+    def ptz_continuous_move(self, body: str) -> str:
+        """Handle ContinuousMove request"""
+        pan_speed, tilt_speed, zoom_speed = self._extract_velocity(body)
+        
+        if self.ptz:
+            self.ptz.continuous_move(pan_speed, tilt_speed, zoom_speed)
+        
+        response = self._render('ptz_continuous_move')
+        return self._wrap_envelope(response)
+    
+    def ptz_stop(self, body: str) -> str:
+        """Handle Stop request"""
+        # Check for PanTilt and Zoom stop flags
+        pan_tilt = True
+        zoom = True
+        
+        pt_stop = self._extract_xml_value(body, 'PanTilt')
+        if pt_stop and pt_stop.lower() == 'false':
+            pan_tilt = False
+        
+        zoom_stop = self._extract_xml_value(body, 'Zoom')
+        if zoom_stop and zoom_stop.lower() == 'false':
+            zoom = False
+        
+        if self.ptz:
+            self.ptz.stop_movement(pan_tilt, zoom)
+        
+        response = self._render('ptz_stop')
+        return self._wrap_envelope(response)
+    
+    def ptz_absolute_move(self, body: str) -> str:
+        """Handle AbsoluteMove request"""
+        pan, tilt, zoom = self._extract_position(body)
+        
+        if self.ptz:
+            self.ptz.absolute_move(pan, tilt, zoom)
+        
+        response = self._render('ptz_absolute_move')
+        return self._wrap_envelope(response)
+    
+    def ptz_relative_move(self, body: str) -> str:
+        """Handle RelativeMove request"""
+        pan, tilt, zoom = self._extract_translation(body)
+        
+        if self.ptz:
+            self.ptz.relative_move(pan, tilt, zoom)
+        
+        response = self._render('ptz_relative_move')
+        return self._wrap_envelope(response)
+    
+    def ptz_goto_home(self, body: str) -> str:
+        """Handle GotoHomePosition request"""
+        if self.ptz:
+            self.ptz.goto_home()
+        
+        response = self._render('ptz_goto_home')
+        return self._wrap_envelope(response)
+    
+    def ptz_get_presets(self, body: str) -> str:
+        """Handle GetPresets request"""
+        preset_items = ""
+        
+        if self.ptz:
+            presets = self.ptz.get_presets()
+            for token, preset in presets.items():
+                preset_items += f"""
+      <tptz:Preset token="{preset.token}">
+        <tt:Name>{preset.name}</tt:Name>
+        <tt:PTZPosition>
+          <tt:PanTilt x="{preset.pan}" y="{preset.tilt}"/>
+          <tt:Zoom x="{preset.zoom}"/>
+        </tt:PTZPosition>
+      </tptz:Preset>"""
+        
+        response = self._render('ptz_get_presets', presets=preset_items)
+        return self._wrap_envelope(response)
+    
+    def ptz_set_preset(self, body: str) -> str:
+        """Handle SetPreset request"""
+        preset_name = self._extract_xml_value(body, 'PresetName') or 'Preset'
+        preset_token = self._extract_xml_attr(body, 'SetPreset', 'PresetToken')
+        
+        if not preset_token:
+            # Generate new token
+            preset_token = f"preset_{uuid.uuid4().hex[:8]}"
+        
+        if self.ptz:
+            self.ptz.set_preset(preset_token, preset_name)
+        
+        response = self._render('ptz_set_preset', preset_token=preset_token)
+        return self._wrap_envelope(response)
+    
+    def ptz_goto_preset(self, body: str) -> str:
+        """Handle GotoPreset request"""
+        preset_token = self._extract_xml_value(body, 'PresetToken')
+        
+        if self.ptz and preset_token:
+            self.ptz.goto_preset(preset_token)
+        
+        response = self._render('ptz_goto_preset')
+        return self._wrap_envelope(response)

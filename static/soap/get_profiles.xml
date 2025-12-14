@@ -17,6 +17,10 @@
                 <tt:BitrateLimit>{{main_bitrate_kbps}}</tt:BitrateLimit>
             </tt:RateControl>
         </tt:VideoEncoderConfiguration>
+        <tt:PTZConfiguration token="PTZ_Config_1">
+            <tt:Name>PTZConfiguration</tt:Name>
+            <tt:NodeToken>PTZ_Node_1</tt:NodeToken>
+        </tt:PTZConfiguration>
     </trt:Profiles>
     <trt:Profiles token="Profile_Sub" fixed="true">
         <tt:Name>SubStream</tt:Name>
@@ -36,5 +40,10 @@
                 <tt:BitrateLimit>{{sub_bitrate_kbps}}</tt:BitrateLimit>
             </tt:RateControl>
         </tt:VideoEncoderConfiguration>
+        <tt:PTZConfiguration token="PTZ_Config_1">
+            <tt:Name>PTZConfiguration</tt:Name>
+            <tt:NodeToken>PTZ_Node_1</tt:NodeToken>
+        </tt:PTZConfiguration>
     </trt:Profiles>
 </trt:GetProfilesResponse>
+

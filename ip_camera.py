@@ -7,6 +7,7 @@ A virtual IP camera that:
 - Provides RTSP streams via go2rtc
 - Has a web interface for configuration and live preview
 - Accepts frames from any source
+- Supports digital PTZ (ePTZ) via ONVIF
 
 Usage:
     camera = IPCamera()
@@ -31,20 +32,31 @@ from video_streamer import VideoStreamer, StreamStats
 from onvif_service import ONVIFService
 from http_handler import IPCameraHTTPHandler
 from ws_discovery import WSDiscoveryServer
+from ptz_controller import PTZController
 
 
 class IPCamera:
     """
     Pure Python IP Camera
     
-    Combines VideoStreamer, ONVIF server, and Web UI into a complete
-    virtual IP camera solution.
+    Combines VideoStreamer, ONVIF server, PTZ controller, and Web UI 
+    into a complete virtual IP camera solution.
     """
     
     def __init__(self, config: Optional[CameraConfig] = None):
         self.config = config or CameraConfig()
         self.streamer: Optional[VideoStreamer] = None
-        self.onvif = ONVIFService(self.config)
+        
+        # Initialize PTZ controller
+        self.ptz = PTZController(
+            output_width=self.config.main_width,
+            output_height=self.config.main_height,
+            max_zoom=4.0
+        )
+        
+        # Initialize ONVIF service with PTZ
+        self.onvif = ONVIFService(self.config, self.ptz)
+        
         self._http_server: Optional[socketserver.TCPServer] = None
         self._discovery: Optional[WSDiscoveryServer] = None
         self._last_frame: Optional[np.ndarray] = None
@@ -91,6 +103,9 @@ class IPCamera:
         """Stop all camera services"""
         self._running = False
         
+        if self.ptz:
+            self.ptz.stop()
+        
         if self.streamer:
             self.streamer.stop()
         
@@ -103,8 +118,12 @@ class IPCamera:
         print("IP Camera stopped")
     
     def stream(self, frame: np.ndarray) -> bool:
-        """Send a frame to the stream"""
-        self._last_frame = frame.copy()  # Keep for snapshots
+        """Send a frame to the stream (applies PTZ transform)"""
+        # Apply PTZ transform
+        if self.ptz:
+            frame = self.ptz.apply_ptz(frame)
+        
+        self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted)
         if self.streamer:
             return self.streamer.stream(frame)
         return False
@@ -119,6 +138,11 @@ class IPCamera:
             if self.streamer:
                 self.streamer.stop()
                 self.streamer = None
+            
+            # Update PTZ controller dimensions
+            if self.ptz:
+                self.ptz.output_width = self.config.main_width
+                self.ptz.output_height = self.config.main_height
             
             # Create new streamer with updated config
             stream_config = self.config.to_stream_config()

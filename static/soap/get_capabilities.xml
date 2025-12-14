@@ -13,5 +13,9 @@
                 <tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>
             </tt:StreamingCapabilities>
         </tt:Media>
+        <tt:PTZ>
+            <tt:XAddr>{{ptz_url}}</tt:XAddr>
+        </tt:PTZ>
     </tds:Capabilities>
 </tds:GetCapabilitiesResponse>
+
