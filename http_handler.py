@@ -58,10 +58,6 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')
             soap_action = self.headers.get('SOAPAction', '').strip('"')
-            path = urlparse(self.path).path
-            
-            # Debug: log incoming requests
-            print(f"[ONVIF] {path} Action: {soap_action or '(detecting from body)'}")
             
             # Detect action from body if header is missing
             if not soap_action:
@@ -83,11 +79,6 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
                         if action in body:
                             soap_action = action
                             break
-            
-            if not soap_action:
-                print(f"[ONVIF] Could not detect action. Body snippet: {body[:500]}")
-            else:
-                print(f"[ONVIF] Detected action: {soap_action}")
             
             response = self.camera.onvif.handle_action(soap_action, body)
             
