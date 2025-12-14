@@ -1,0 +1,7 @@
+<tds:GetDeviceInformationResponse>
+    <tds:Manufacturer>{{manufacturer}}</tds:Manufacturer>
+    <tds:Model>{{model}}</tds:Model>
+    <tds:FirmwareVersion>{{firmware_version}}</tds:FirmwareVersion>
+    <tds:SerialNumber>{{serial_number}}</tds:SerialNumber>
+    <tds:HardwareId>PY-HW-01</tds:HardwareId>
+</tds:GetDeviceInformationResponse>

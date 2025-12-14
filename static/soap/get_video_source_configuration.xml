@@ -1,0 +1,8 @@
+<trt:GetVideoSourceConfigurationResponse>
+    <trt:Configuration token="VSC_1">
+        <tt:Name>VideoSource_1</tt:Name>
+        <tt:UseCount>1</tt:UseCount>
+        <tt:SourceToken>VS_1</tt:SourceToken>
+        <tt:Bounds x="0" y="0" width="{{main_width}}" height="{{main_height}}"/>
+    </trt:Configuration>
+</trt:GetVideoSourceConfigurationResponse>

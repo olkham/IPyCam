@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{camera_name}} - Configuration</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1><span class="status online" id="status"></span> {{camera_name}}</h1>
+        
+        <div class="grid">
+            <div>
+                <div class="card preview" id="preview-container">
+                    <iframe id="preview-iframe" src="{{preview_url}}" data-main-stream="{{main_stream_name}}" data-sub-stream="{{sub_stream_name}}" data-api-url="{{webrtc_url}}" allowfullscreen></iframe>
+                </div>
+                <div class="preview-toolbar">
+                    <div class="stream-switcher">
+                        <button class="btn-stream active" data-stream="main" onclick="switchStream('main')">Main</button>
+                        <button class="btn-stream" data-stream="sub" onclick="switchStream('sub')">Sub</button>
+                    </div>
+                </div>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value" id="fps">-</div>
+                        <div class="stat-label">FPS</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="frames">-</div>
+                        <div class="stat-label">Frames</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="uptime">-</div>
+                        <div class="stat-label">Uptime</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="dropped">-</div>
+                        <div class="stat-label">Dropped</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Stream URLs</h2>
+                <div class="url-list">
+                    <div><span>Main RTSP:</span> {{main_rtsp}}</div>
+                    <div><span>Sub RTSP:</span> {{sub_rtsp}}</div>
+                    <div><span>ONVIF:</span> {{onvif_url}}</div>
+                    <div><span>WebRTC:</span> {{webrtc_url}}</div>
+                </div>
+                
+                <h2>Main Stream</h2>
+                <div class="inline">
+                    <div class="form-group">
+                        <label>Resolution</label>
+                        <select id="main_res">
+                            <option value="1920x1080">1920x1080</option>
+                            <option value="1280x720">1280x720</option>
+                            <option value="640x480">640x480</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>FPS</label>
+                        <select id="main_fps">
+                            <option value="60">60</option>
+                            <option value="30">30</option>
+                            <option value="15">15</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Bitrate</label>
+                    <select id="main_bitrate">
+                        <option value="8M">8 Mbps</option>
+                        <option value="4M">4 Mbps</option>
+                        <option value="2M">2 Mbps</option>
+                        <option value="1M">1 Mbps</option>
+                    </select>
+                </div>
+                
+                <h2>Sub Stream</h2>
+                <div class="inline">
+                    <div class="form-group">
+                        <label>Resolution</label>
+                        <select id="sub_res">
+                            <option value="640x480">640x480</option>
+                            <option value="320x240">320x240</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Bitrate</label>
+                        <select id="sub_bitrate">
+                            <option value="1M">1 Mbps</option>
+                            <option value="512K">512 Kbps</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <h2>Encoder</h2>
+                <div class="form-group">
+                    <label>Hardware Acceleration</label>
+                    <select id="hw_accel">
+                        <option value="auto">Auto</option>
+                        <option value="nvenc">NVENC (NVIDIA)</option>
+                        <option value="qsv">QSV (Intel)</option>
+                        <option value="cpu">CPU</option>
+                    </select>
+                </div>
+                
+                <button class="btn" onclick="applyConfig()">Apply Changes</button>
+                <span id="apply-status" style="margin-left: 10px; color: #888;"></span>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<tds:GetCapabilitiesResponse>
+    <tds:Capabilities>
+        <tt:Device>
+            <tt:XAddr>{{device_url}}</tt:XAddr>
+            <tt:Network><tt:IPFilter>false</tt:IPFilter><tt:ZeroConfiguration>false</tt:ZeroConfiguration></tt:Network>
+            <tt:System><tt:DiscoveryResolve>false</tt:DiscoveryResolve><tt:DiscoveryBye>false</tt:DiscoveryBye></tt:System>
+        </tt:Device>
+        <tt:Media>
+            <tt:XAddr>{{media_url}}</tt:XAddr>
+            <tt:StreamingCapabilities>
+                <tt:RTPMulticast>false</tt:RTPMulticast>
+                <tt:RTP_TCP>true</tt:RTP_TCP>
+                <tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>
+            </tt:StreamingCapabilities>
+        </tt:Media>
+    </tds:Capabilities>
+</tds:GetCapabilitiesResponse>

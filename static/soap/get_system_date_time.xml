@@ -1,0 +1,19 @@
+<tds:GetSystemDateAndTimeResponse>
+    <tds:SystemDateAndTime>
+        <tt:DateTimeType>NTP</tt:DateTimeType>
+        <tt:DaylightSavings>false</tt:DaylightSavings>
+        <tt:TimeZone><tt:TZ>GMT+00:00</tt:TZ></tt:TimeZone>
+        <tt:UTCDateTime>
+            <tt:Time>
+                <tt:Hour>{{hour}}</tt:Hour>
+                <tt:Minute>{{minute}}</tt:Minute>
+                <tt:Second>{{second}}</tt:Second>
+            </tt:Time>
+            <tt:Date>
+                <tt:Year>{{year}}</tt:Year>
+                <tt:Month>{{month}}</tt:Month>
+                <tt:Day>{{day}}</tt:Day>
+            </tt:Date>
+        </tt:UTCDateTime>
+    </tds:SystemDateAndTime>
+</tds:GetSystemDateAndTimeResponse>

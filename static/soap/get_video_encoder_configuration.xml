@@ -1,0 +1,16 @@
+<trt:GetVideoEncoderConfigurationResponse>
+    <trt:Configuration token="VEC_1">
+        <tt:Name>H264_Main</tt:Name>
+        <tt:UseCount>1</tt:UseCount>
+        <tt:Encoding>H264</tt:Encoding>
+        <tt:Resolution><tt:Width>{{main_width}}</tt:Width><tt:Height>{{main_height}}</tt:Height></tt:Resolution>
+        <tt:Quality>5</tt:Quality>
+        <tt:RateControl>
+            <tt:FrameRateLimit>{{main_fps}}</tt:FrameRateLimit>
+            <tt:EncodingInterval>1</tt:EncodingInterval>
+            <tt:BitrateLimit>{{main_bitrate_kbps}}</tt:BitrateLimit>
+        </tt:RateControl>
+        <tt:H264><tt:GovLength>{{main_fps}}</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264>
+        <tt:SessionTimeout>PT60S</tt:SessionTimeout>
+    </trt:Configuration>
+</trt:GetVideoEncoderConfigurationResponse>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"
+               xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+               xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+               xmlns:dn="http://www.onvif.org/ver10/network/wsdl"
+               xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+    <soap:Header>
+        <wsa:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</wsa:To>
+        <wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatch</wsa:Action>
+        <wsa:MessageID>{{message_id}}</wsa:MessageID>
+        <wsa:RelatesTo>{{relates_to}}</wsa:RelatesTo>
+    </soap:Header>
+    <soap:Body>
+        <d:ProbeMatch>
+            <d:EndpointReference><wsa:Address>{{device_uuid}}</wsa:Address></d:EndpointReference>
+            <d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>
+            <d:Scopes>onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/Profile/Streaming onvif://www.onvif.org/name/{{camera_name}}</d:Scopes>
+            <d:XAddrs>{{onvif_url}}</d:XAddrs>
+            <d:MetadataVersion>1</d:MetadataVersion>
+        </d:ProbeMatch>
+    </soap:Body>
+</soap:Envelope>
