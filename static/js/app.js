@@ -1,6 +1,88 @@
 // IP Camera Web UI JavaScript
 
 /**
+ * PTZ Control Functions
+ */
+let ptzMoveTimeout = null;
+
+function ptzMove(pan, tilt) {
+    // Clear any pending stop
+    if (ptzMoveTimeout) {
+        clearTimeout(ptzMoveTimeout);
+        ptzMoveTimeout = null;
+    }
+    
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'move', pan: pan, tilt: tilt, zoom: 0 })
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function ptzStop() {
+    // Small delay to avoid rapid start/stop
+    ptzMoveTimeout = setTimeout(() => {
+        fetch('/api/ptz', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'stop' })
+        })
+        .catch(err => console.error('PTZ error:', err));
+        ptzMoveTimeout = null;
+    }, 50);
+}
+
+function ptzZoom(delta) {
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'zoom', delta: delta })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.zoom !== undefined) {
+            document.getElementById('zoom-slider').value = data.zoom * 100;
+        }
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function ptzZoomTo(percent) {
+    const value = parseFloat(percent) / 100;
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'zoom_to', value: value })
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function ptzHome() {
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'home' })
+    })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('zoom-slider').value = 0;
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function updatePtzStatus() {
+    fetch('/api/ptz')
+        .then(r => r.json())
+        .then(data => {
+            if (data.zoom !== undefined) {
+                document.getElementById('zoom-slider').value = data.zoom * 100;
+            }
+        })
+        .catch(() => {});
+}
+
+/**
  * Switch between main and sub stream preview
  */
 function switchStream(stream) {
@@ -144,4 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Load current config
     loadConfig();
+    
+    // Load PTZ status
+    updatePtzStatus();
 });

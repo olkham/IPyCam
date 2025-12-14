@@ -1,0 +1,6 @@
+<tds:GetUsersResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+    <tds:User>
+        <tt:Username>admin</tt:Username>
+        <tt:UserLevel>Administrator</tt:UserLevel>
+    </tds:User>
+</tds:GetUsersResponse>

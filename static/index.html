@@ -20,6 +20,22 @@
                         <button class="btn-stream active" data-stream="main" onclick="switchStream('main')">Main</button>
                         <button class="btn-stream" data-stream="sub" onclick="switchStream('sub')">Sub</button>
                     </div>
+                    <div class="ptz-controls">
+                        <div class="ptz-pad">
+                            <button class="btn-ptz btn-ptz-up" onmousedown="ptzMove(0, 0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Tilt Up">▲</button>
+                            <div class="ptz-pad-row">
+                                <button class="btn-ptz" onmousedown="ptzMove(-0.5, 0)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Pan Left">◀</button>
+                                <button class="btn-ptz btn-ptz-home" onclick="ptzHome()" title="Home">⌂</button>
+                                <button class="btn-ptz" onmousedown="ptzMove(0.5, 0)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Pan Right">▶</button>
+                            </div>
+                            <button class="btn-ptz btn-ptz-down" onmousedown="ptzMove(0, -0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Tilt Down">▼</button>
+                        </div>
+                        <div class="zoom-controls">
+                            <button class="btn-ptz" onclick="ptzZoom(0.1)" title="Zoom In">+</button>
+                            <input type="range" id="zoom-slider" min="0" max="100" value="0" orient="vertical" oninput="ptzZoomTo(this.value)">
+                            <button class="btn-ptz" onclick="ptzZoom(-0.1)" title="Zoom Out">−</button>
+                        </div>
+                    </div>
                 </div>
                 <div class="stats">
                     <div class="stat">

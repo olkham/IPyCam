@@ -1,0 +1,37 @@
+<tptz:GetNodesResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+    <tptz:PTZNode token="PTZ_Node_1" FixedHomePosition="true">
+        <tt:Name>DigitalPTZ</tt:Name>
+        <tt:SupportedPTZSpaces>
+            <tt:AbsolutePanTiltPositionSpace>
+                <tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI>
+                <tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>
+                <tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>
+            </tt:AbsolutePanTiltPositionSpace>
+            <tt:AbsoluteZoomPositionSpace>
+                <tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI>
+                <tt:XRange><tt:Min>0.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>
+            </tt:AbsoluteZoomPositionSpace>
+            <tt:RelativePanTiltTranslationSpace>
+                <tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace</tt:URI>
+                <tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>
+                <tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>
+            </tt:RelativePanTiltTranslationSpace>
+            <tt:RelativeZoomTranslationSpace>
+                <tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace</tt:URI>
+                <tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>
+            </tt:RelativeZoomTranslationSpace>
+            <tt:ContinuousPanTiltVelocitySpace>
+                <tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:URI>
+                <tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>
+                <tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>
+            </tt:ContinuousPanTiltVelocitySpace>
+            <tt:ContinuousZoomVelocitySpace>
+                <tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace</tt:URI>
+                <tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>
+            </tt:ContinuousZoomVelocitySpace>
+        </tt:SupportedPTZSpaces>
+        <tt:MaximumNumberOfPresets>10</tt:MaximumNumberOfPresets>
+        <tt:HomeSupported>true</tt:HomeSupported>
+        <tt:AuxiliaryCommands/>
+    </tptz:PTZNode>
+</tptz:GetNodesResponse>

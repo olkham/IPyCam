@@ -67,6 +67,9 @@ class PTZController:
         self.velocity = PTZVelocity()
         self.presets: Dict[str, PTZPreset] = {}
         
+        # Fast check flag - True when PTZ is at default position (no transform needed)
+        self._is_default = True
+        
         self._lock = threading.Lock()
         self._movement_thread: Optional[threading.Thread] = None
         self._movement_running = False
@@ -99,17 +102,16 @@ class PTZController:
         Returns:
             Transformed frame at output_width x output_height
         """
-        with self._lock:
-            pan = self.state.pan
-            tilt = self.state.tilt
-            zoom = self.state.zoom
+        # Ultra-fast path: single boolean check when PTZ is at default
+        if self._is_default:
+            return frame
+        
+        # Read current state (lock-free, small race acceptable)
+        pan = self.state.pan
+        tilt = self.state.tilt
+        zoom = self.state.zoom
         
         src_h, src_w = frame.shape[:2]
-        
-        # Fast path: if no PTZ adjustment and frame matches output size, return as-is
-        if (abs(pan) < 0.001 and abs(tilt) < 0.001 and abs(zoom) < 0.001 and
-            src_w == self.output_width and src_h == self.output_height):
-            return frame
         
         # Calculate crop size based on zoom level
         zoom_factor = 1.0 + zoom * (self.max_zoom - 1.0)
@@ -169,6 +171,11 @@ class PTZController:
                 self.state.pan = max(-1.0, min(1.0, self.state.pan))
                 self.state.tilt = max(-1.0, min(1.0, self.state.tilt))
                 self.state.zoom = max(0.0, min(1.0, self.state.zoom))
+                
+                # Update default flag
+                self._is_default = (abs(self.state.pan) < 0.001 and 
+                                   abs(self.state.tilt) < 0.001 and 
+                                   abs(self.state.zoom) < 0.001)
             
             time.sleep(0.016)  # ~60Hz update rate
     
@@ -203,6 +210,10 @@ class PTZController:
                 self.state.zoom = max(0.0, min(1.0, zoom))
             # Stop any continuous movement
             self.velocity = PTZVelocity()
+            # Update default flag
+            self._is_default = (abs(self.state.pan) < 0.001 and 
+                               abs(self.state.tilt) < 0.001 and 
+                               abs(self.state.zoom) < 0.001)
     
     def relative_move(self, pan_delta: float = 0.0, tilt_delta: float = 0.0,
                      zoom_delta: float = 0.0):
@@ -213,6 +224,10 @@ class PTZController:
             self.state.zoom = max(0.0, min(1.0, self.state.zoom + zoom_delta))
             # Stop any continuous movement
             self.velocity = PTZVelocity()
+            # Update default flag
+            self._is_default = (abs(self.state.pan) < 0.001 and 
+                               abs(self.state.tilt) < 0.001 and 
+                               abs(self.state.zoom) < 0.001)
     
     def goto_home(self):
         """Return to home position (center, no zoom)"""
@@ -256,6 +271,10 @@ class PTZController:
             self.state.tilt = preset.tilt
             self.state.zoom = preset.zoom
             self.velocity = PTZVelocity()
+            # Update default flag
+            self._is_default = (abs(self.state.pan) < 0.001 and 
+                               abs(self.state.tilt) < 0.001 and 
+                               abs(self.state.zoom) < 0.001)
         return True
     
     def remove_preset(self, token: str) -> bool:

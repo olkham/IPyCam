@@ -1,0 +1,4 @@
+<tptz:GetServiceCapabilitiesResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+    <tptz:Capabilities EFlip="false" Reverse="false" GetCompatibleConfigurations="true" MoveStatus="true" StatusPosition="true">
+    </tptz:Capabilities>
+</tptz:GetServiceCapabilitiesResponse>

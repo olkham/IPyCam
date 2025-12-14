@@ -51,6 +51,7 @@ class ONVIFService:
             'GetCapabilities': self.get_capabilities,
             'GetServices': self.get_services,
             'GetScopes': self.get_scopes,
+            'GetUsers': self.get_users,
             'GetProfiles': self.get_profiles,
             'GetStreamUri': lambda: self.get_stream_uri(body),
             'GetSnapshotUri': lambda: self.get_snapshot_uri(body),
@@ -58,7 +59,11 @@ class ONVIFService:
             'GetVideoSourceConfiguration': self.get_video_source_configuration,
             'GetAudioDecoderConfigurations': self.get_audio_decoder_configurations,
             # PTZ handlers
+            'GetNodes': self.ptz_get_nodes,
+            'GetNode': self.ptz_get_node,
             'GetConfigurations': self.ptz_get_configurations,
+            'GetConfiguration': self.ptz_get_configurations,
+            'GetServiceCapabilities': self.ptz_get_service_capabilities,
             'GetStatus': lambda: self.ptz_get_status(body),
             'ContinuousMove': lambda: self.ptz_continuous_move(body),
             'Stop': lambda: self.ptz_stop(body),
@@ -118,6 +123,11 @@ class ONVIFService:
 
     def get_scopes(self) -> str:
         body = self._render('get_scopes', camera_name=self.config.name)
+        return self._wrap_envelope(body)
+
+    def get_users(self) -> str:
+        body = self._render('get_users')
+        return self._wrap_envelope(body)
         return self._wrap_envelope(body)
 
     def get_profiles(self) -> str:
@@ -261,6 +271,21 @@ class ONVIFService:
                 pass
         
         return pan, tilt, zoom
+
+    def ptz_get_nodes(self) -> str:
+        """Handle GetNodes request - returns list of PTZ nodes"""
+        body = self._render('ptz_get_nodes')
+        return self._wrap_envelope(body)
+
+    def ptz_get_node(self) -> str:
+        """Handle GetNode request - returns single PTZ node details"""
+        body = self._render('ptz_get_node')
+        return self._wrap_envelope(body)
+
+    def ptz_get_service_capabilities(self) -> str:
+        """Handle GetServiceCapabilities request for PTZ service"""
+        body = self._render('ptz_get_service_capabilities')
+        return self._wrap_envelope(body)
 
     def ptz_get_configurations(self) -> str:
         """Handle GetConfigurations request"""

@@ -87,6 +87,94 @@ h2 {
     color: #000;
 }
 
+/* PTZ Controls */
+.ptz-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-left: auto;
+}
+
+.ptz-pad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.ptz-pad-row {
+    display: flex;
+    gap: 2px;
+}
+
+.btn-ptz {
+    background: #0f3460;
+    color: #00d4ff;
+    border: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+}
+
+.btn-ptz:hover {
+    background: #00d4ff;
+    color: #000;
+}
+
+.btn-ptz:active {
+    background: #00a8cc;
+    transform: scale(0.95);
+}
+
+.btn-ptz-home {
+    font-size: 16px;
+}
+
+.zoom-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+#zoom-slider {
+    width: 6px;
+    height: 60px;
+    -webkit-appearance: slider-vertical;
+    appearance: slider-vertical;
+    background: #0f3460;
+    border-radius: 3px;
+    outline: none;
+    writing-mode: bt-lr;
+}
+
+#zoom-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00d4ff;
+    cursor: pointer;
+}
+
+#zoom-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00d4ff;
+    cursor: pointer;
+    border: none;
+}
+
 /* Stats Section */
 .stats {
     display: grid;
