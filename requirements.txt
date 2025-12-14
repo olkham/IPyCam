@@ -1,0 +1,6 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# Optional: for better performance
+# opencv-contrib-python>=4.8.0

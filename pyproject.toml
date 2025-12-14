@@ -1,0 +1,34 @@
+[project]
+name = "ipycam"
+version = "1.0.0"
+description = "Pure Python Virtual IP Camera with ONVIF support"
+authors = [
+    {name = "Oliver Hamilton", email = "oliver9523@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["camera", "onvif", "rtsp", "streaming", "virtual-camera"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ipycam"]
