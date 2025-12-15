@@ -27,7 +27,7 @@ __version__ = "1.0.0"
 from .config import CameraConfig
 from .camera import IPCamera
 from .streamer import VideoStreamer, StreamConfig, StreamStats, HWAccel
-from .ptz import PTZController, PTZState, PTZPreset
+from .ptz import PTZController, PTZState, PTZPreset, PTZHardwareHandler, PTZVelocity
 from .onvif import ONVIFService
 from .discovery import WSDiscoveryServer
 from .http import IPCameraHTTPHandler
@@ -45,6 +45,8 @@ __all__ = [
     "PTZController",
     "PTZState",
     "PTZPreset",
+    "PTZVelocity",
+    "PTZHardwareHandler",
     # ONVIF
     "ONVIFService",
     "WSDiscoveryServer",

@@ -93,6 +93,27 @@ python generated_content.py
 
 ---
 
+### 6. Hardware PTZ (`hardware_ptz.py`)
+Connect external hardware (motors, servos, gimbals) to ONVIF PTZ commands.
+
+```bash
+python hardware_ptz.py
+```
+
+**What it demonstrates:**
+- Implementing the `PTZHardwareHandler` protocol
+- Registering hardware handlers with the PTZ controller
+- Converting normalized PTZ values to hardware-specific values
+- Running digital PTZ alongside hardware PTZ
+- Hardware-only mode (disable digital PTZ)
+
+**Example handlers included:**
+- `PrintingPTZHandler` - Debug handler that prints all commands
+- `ServoExample` - Template for RC servo control (Raspberry Pi, etc.)
+- `StepperMotorExample` - Template for stepper motor control
+
+---
+
 ## Accessing the Streams
 
 Once any example is running, you can access:
