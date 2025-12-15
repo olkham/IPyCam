@@ -7,7 +7,11 @@ import threading
 import re
 import uuid
 
-from .onvif import ONVIFService
+# Handle both package and direct execution
+try:
+    from .onvif import ONVIFService
+except ImportError:
+    from onvif import ONVIFService
 
 
 class WSDiscoveryServer(threading.Thread):
@@ -51,18 +55,30 @@ class WSDiscoveryServer(threading.Thread):
 
 
 if __name__ == "__main__":
-    from ipycam.config import CameraConfig
-    from ipycam.onvif import ONVIFService
+    from config import CameraConfig
+    from onvif import ONVIFService
+    from ptz import PTZController
     
     config = CameraConfig.load()
-    onvif_service = ONVIFService(config)
+    
+    # Create PTZ controller (required by ONVIFService)
+    ptz = PTZController(
+        output_width=config.main_width,
+        output_height=config.main_height,
+        max_zoom=4.0
+    )
+    
+    onvif_service = ONVIFService(config, ptz)
     discovery_server = WSDiscoveryServer(onvif_service)
     discovery_server.start()
     
     print("WS-Discovery server running. Press Ctrl+C to stop.")
+    print(f"Listening on 239.255.255.250:3702")
+    print(f"Camera endpoint: {config.onvif_url}")
     try:
         while True:
             pass
     except KeyboardInterrupt:
-        print("Stopping WS-Discovery server...")
+        print("\nStopping WS-Discovery server...")
         discovery_server.stop()
+        ptz.stop()

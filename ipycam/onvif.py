@@ -7,10 +7,16 @@ import time
 import uuid
 from typing import Dict, Optional, TYPE_CHECKING
 
-from .config import CameraConfig
+try:
+    from .config import CameraConfig
+except ImportError:
+    from config import CameraConfig
 
 if TYPE_CHECKING:
-    from .ptz import PTZController
+    try:
+        from .ptz import PTZController
+    except ImportError:
+        from ptz import PTZController
 
 
 class ONVIFService:

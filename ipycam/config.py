@@ -5,7 +5,10 @@ import json
 import socket
 from dataclasses import dataclass, asdict
 
-from .streamer import StreamConfig, HWAccel
+try:
+    from .streamer import StreamConfig, HWAccel
+except ImportError:
+    from streamer import StreamConfig, HWAccel
 
 
 def get_local_ip() -> str:
