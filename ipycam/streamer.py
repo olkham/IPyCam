@@ -31,7 +31,7 @@ class StreamConfig:
     fps: int = 30
     bitrate: str = "4M"
     keyframe_interval: Optional[int] = None  # Defaults to fps (1 second)
-    hw_accel: HWAccel = HWAccel.AUTO
+    hw_accel: HWAccel = HWAccel.QSV
     # Substream settings (used when rtmp_url_sub is provided)
     sub_width: int = 640
     sub_height: int = 480
@@ -118,6 +118,7 @@ class VideoStreamer:
         self.stats = StreamStats()
         self._active_hw_accel: Optional[str] = None
         self._rtmp_url: Optional[str] = None
+        self._ffmpeg_stderr_buffer = []
         
     @property
     def is_running(self) -> bool:
@@ -159,17 +160,27 @@ class VideoStreamer:
             hw_order = [self.config.hw_accel]
         
         for hw_type in hw_order:
+            print(f"Trying {hw_type.value.upper()}...")
             try:
+                # Reset stderr buffer for this attempt
+                self._ffmpeg_stderr_buffer = []
+                
                 self._start_ffmpeg(rtmp_url, rtmp_url_sub, hw_type)
                 if self._check_ffmpeg_running():
-                    self._active_hw_accel = hw_type.value
-                    self._is_running = True
-                    print(f"✓ Streamer started with {hw_type.value.upper()} acceleration")
-                    print(f"  Primary:   {rtmp_url}")
-                    if rtmp_url_sub:
-                        print(f"  Substream: {rtmp_url_sub}")
-                    return True
+                    # Warm-up: Send test frames to verify encoder actually works
+                    if self._warm_up_encoder():
+                        self._active_hw_accel = hw_type.value
+                        self._is_running = True
+                        print(f"✓ Streamer started with {hw_type.value.upper()} acceleration")
+                        print(f"  Primary:   {rtmp_url}")
+                        if rtmp_url_sub:
+                            print(f"  Substream: {rtmp_url_sub}")
+                        return True
+                    else:
+                        print(f"✗ {hw_type.value.upper()} encoder initialization failed")
+                        self._cleanup_ffmpeg()
                 else:
+                    print(f"✗ {hw_type.value.upper()} failed to start")
                     self._cleanup_ffmpeg()
             except Exception as e:
                 print(f"✗ {hw_type.value.upper()} failed: {e}")
@@ -339,23 +350,126 @@ class VideoStreamer:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
         )
+        
+        # Store stderr for error checking
+        self._ffmpeg_stderr_buffer = []
+        
+        def read_stderr():
+            """Read stderr in background to detect errors early"""
+            if self._ffmpeg_process and self._ffmpeg_process.stderr:
+                try:
+                    for line in iter(self._ffmpeg_process.stderr.readline, b''):
+                        if line:
+                            self._ffmpeg_stderr_buffer.append(line)
+                            # Keep buffer from growing too large
+                            if len(self._ffmpeg_stderr_buffer) > 100:
+                                self._ffmpeg_stderr_buffer.pop(0)
+                except:
+                    pass
+        
+        # Start stderr reader thread
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
     
-    def _check_ffmpeg_running(self) -> bool:
-        """Check if FFmpeg started successfully"""
+    def _warm_up_encoder(self) -> bool:
+        """Send test frames to verify encoder works before declaring success"""
+        try:
+            # Create a black test frame
+            test_frame = np.zeros((self.config.height, self.config.width, 3), dtype=np.uint8)
+            frame_bytes = test_frame.tobytes()
+            
+            # Send 3 test frames
+            for i in range(3):
+                if self._ffmpeg_process and self._ffmpeg_process.stdin:
+                    self._ffmpeg_process.stdin.write(frame_bytes)
+                    self._ffmpeg_process.stdin.flush()
+                    time.sleep(0.05)
+                    
+                    # Check if process died
+                    if self._ffmpeg_process.poll() is not None:
+                        return False
+                    
+                    # Check for encoder errors in stderr
+                    if self._ffmpeg_stderr_buffer:
+                        stderr_text = b''.join(self._ffmpeg_stderr_buffer).decode('utf-8', errors='ignore').lower()
+                        error_patterns = [
+                            'driver does not support',
+                            'could not open encoder',
+                            'error while opening encoder',
+                            'error sending frames',
+                            'conversion failed',
+                        ]
+                        for pattern in error_patterns:
+                            if pattern in stderr_text:
+                                return False
+            
+            return True
+        except Exception as e:
+            print(f"  Warm-up failed: {e}")
+            return False
+    
+    def _check_ffmpeg_running(self, timeout: float = 2.0) -> bool:
+        """Check if FFmpeg started successfully with timeout"""
         if self._ffmpeg_process is None:
             return False
-        time.sleep(1.0)
+        
+        # Check periodically for errors
+        start_time = time.time()
+        check_interval = 0.2
+        
+        while time.time() - start_time < timeout:
+            # Check if process has exited with error
+            if self._ffmpeg_process.poll() is not None:
+                self._dump_ffmpeg_error()
+                return False
+            
+            # Check stderr buffer for critical errors
+            if hasattr(self, '_ffmpeg_stderr_buffer'):
+                stderr_text = b''.join(self._ffmpeg_stderr_buffer).decode('utf-8', errors='ignore').lower()
+                
+                # Look for specific error patterns that indicate failure
+                error_patterns = [
+                    'no nvenc capable devices found',
+                    'driver does not support',
+                    'required nvenc api version',
+                    'minimum required nvidia driver',
+                    'could not open encoder',
+                    'error while opening encoder',
+                    'cannot load',
+                    'invalid encoder',
+                    'unknown encoder',
+                    'encoder not found',
+                    'unsupported codec',
+                    'init failed',
+                    'initialization failed',
+                    'conversion failed',
+                    'nothing was written into output file',
+                ]
+                
+                for pattern in error_patterns:
+                    if pattern in stderr_text:
+                        print(f"  Detected error: {pattern}")
+                        return False
+            
+            time.sleep(check_interval)
+        
+        # After timeout, check one final time if process is still alive
         if self._ffmpeg_process.poll() is not None:
-            self._dump_ffmpeg_error()
             return False
+        
         return True
     
     def _dump_ffmpeg_error(self):
         """Print FFmpeg stderr for debugging"""
-        if self._ffmpeg_process and self._ffmpeg_process.stderr:
+        if hasattr(self, '_ffmpeg_stderr_buffer') and self._ffmpeg_stderr_buffer:
+            stderr_text = b''.join(self._ffmpeg_stderr_buffer).decode('utf-8', errors='ignore')
+            if stderr_text.strip():
+                print(f"FFmpeg error output:\n{stderr_text}")
+        elif self._ffmpeg_process and self._ffmpeg_process.stderr:
             try:
-                self._ffmpeg_process.stderr.flush()
+                # Try to read remaining stderr
                 stderr = self._ffmpeg_process.stderr.read()
                 if stderr:
                     print(f"FFmpeg error output:\n{stderr.decode('utf-8', errors='ignore')}")
