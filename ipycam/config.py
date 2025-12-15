@@ -56,6 +56,11 @@ class CameraConfig:
     # Encoding
     hw_accel: str = "auto"
     
+    # Overlay
+    show_timestamp: bool = True
+    timestamp_format: str = "%Y-%m-%d %H:%M:%S"
+    timestamp_position: str = "bottom-left"  # top-left, top-right, bottom-left, bottom-right
+    
     def __post_init__(self):
         if not self.local_ip:
             self.local_ip = get_local_ip()

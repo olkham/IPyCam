@@ -20,22 +20,6 @@
                         <button class="btn-stream active" data-stream="main" onclick="switchStream('main')">Main</button>
                         <button class="btn-stream" data-stream="sub" onclick="switchStream('sub')">Sub</button>
                     </div>
-                    <div class="ptz-controls">
-                        <div class="ptz-pad">
-                            <button class="btn-ptz btn-ptz-up" onmousedown="ptzMove(0, 0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Tilt Up">▲</button>
-                            <div class="ptz-pad-row">
-                                <button class="btn-ptz" onmousedown="ptzMove(-0.5, 0)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Pan Left">◀</button>
-                                <button class="btn-ptz btn-ptz-home" onclick="ptzHome()" title="Home">⌂</button>
-                                <button class="btn-ptz" onmousedown="ptzMove(0.5, 0)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Pan Right">▶</button>
-                            </div>
-                            <button class="btn-ptz btn-ptz-down" onmousedown="ptzMove(0, -0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Tilt Down">▼</button>
-                        </div>
-                        <div class="zoom-controls">
-                            <button class="btn-ptz" onclick="ptzZoom(0.1)" title="Zoom In">+</button>
-                            <input type="range" id="zoom-slider" min="0" max="100" value="0" orient="vertical" oninput="ptzZoomTo(this.value)">
-                            <button class="btn-ptz" onclick="ptzZoom(-0.1)" title="Zoom Out">−</button>
-                        </div>
-                    </div>
                 </div>
                 <div class="stats">
                     <div class="stat">
@@ -53,6 +37,25 @@
                     <div class="stat">
                         <div class="stat-value" id="dropped">-</div>
                         <div class="stat-label">Dropped</div>
+                    </div>
+                </div>
+                <div class="ptz-controls">
+                    <div class="ptz-pad">
+                        <button class="btn-ptz btn-ptz-up" onmousedown="ptzMove(0, 0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Tilt Up">▲</button>
+                        <div class="ptz-pad-row">
+                            <button class="btn-ptz" onmousedown="ptzMove(-0.5, 0)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Pan Left">◀</button>
+                            <button class="btn-ptz btn-ptz-home" onclick="ptzHome()" title="Home">⌂</button>
+                            <button class="btn-ptz" onmousedown="ptzMove(0.5, 0)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Pan Right">▶</button>
+                        </div>
+                        <button class="btn-ptz btn-ptz-down" onmousedown="ptzMove(0, -0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()" title="Tilt Down">▼</button>
+                    </div>
+                    <div class="zoom-controls">
+                        <button class="btn-ptz" onclick="ptzZoom(0.1)" title="Zoom In">+</button>
+                        <div class="zoom-slider-wrapper">
+                            <div class="zoom-slider-track"></div>
+                            <input type="range" id="zoom-slider" min="0" max="100" value="0" oninput="ptzZoomTo(this.value)">
+                        </div>
+                        <button class="btn-ptz" onclick="ptzZoom(-0.1)" title="Zoom Out">−</button>
                     </div>
                 </div>
             </div>
@@ -121,6 +124,23 @@
                         <option value="nvenc">NVENC (NVIDIA)</option>
                         <option value="qsv">QSV (Intel)</option>
                         <option value="cpu">CPU</option>
+                    </select>
+                </div>
+                
+                <h2>Overlay</h2>
+                <div class="form-group checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="show_timestamp" checked>
+                        <span>Show Timestamp</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>Position</label>
+                    <select id="timestamp_position">
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-right">Bottom Right</option>
+                        <option value="top-left">Top Left</option>
+                        <option value="top-right">Top Right</option>
                     </select>
                 </div>
                 

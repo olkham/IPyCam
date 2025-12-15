@@ -134,7 +134,9 @@ function applyConfig() {
         sub_width: parseInt(subRes[0]),
         sub_height: parseInt(subRes[1]),
         sub_bitrate: document.getElementById('sub_bitrate').value,
-        hw_accel: document.getElementById('hw_accel').value
+        hw_accel: document.getElementById('hw_accel').value,
+        show_timestamp: document.getElementById('show_timestamp').checked,
+        timestamp_position: document.getElementById('timestamp_position').value
     };
     
     const statusEl = document.getElementById('apply-status');
@@ -213,6 +215,14 @@ function loadConfig() {
             const hwAccelSelect = document.getElementById('hw_accel');
             for (let opt of hwAccelSelect.options) {
                 opt.selected = opt.value === config.hw_accel;
+            }
+            
+            // Overlay settings
+            document.getElementById('show_timestamp').checked = config.show_timestamp !== false;
+            
+            const timestampPosSelect = document.getElementById('timestamp_position');
+            for (let opt of timestampPosSelect.options) {
+                opt.selected = opt.value === config.timestamp_position;
             }
         })
         .catch(err => console.error('Failed to load config:', err));

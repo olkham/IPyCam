@@ -26,7 +26,9 @@ import os
 import time
 import threading
 import socketserver
+from datetime import datetime
 import numpy as np
+import cv2
 from typing import Optional
 
 from .config import CameraConfig
@@ -120,15 +122,53 @@ class IPCamera:
         print("IP Camera stopped")
     
     def stream(self, frame: np.ndarray) -> bool:
-        """Send a frame to the stream (applies PTZ transform)"""
-        # Apply PTZ transform
+        """Send a frame to the stream (applies PTZ transform, then timestamp)"""
+        # Apply PTZ transform first
         if self.ptz:
             frame = self.ptz.apply_ptz(frame)
         
-        self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted)
+        # Apply timestamp overlay last (always visible, not affected by PTZ)
+        if self.config.show_timestamp:
+            frame = self._draw_timestamp(frame)
+        
+        self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted + timestamp)
         if self.streamer:
             return self.streamer.stream(frame)
         return False
+    
+    def _draw_timestamp(self, frame: np.ndarray) -> np.ndarray:
+        """Draw timestamp overlay on frame"""
+        timestamp = datetime.now().strftime(self.config.timestamp_format)
+        
+        # Font settings
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        thickness = 2
+        color = (255, 255, 255)  # White
+        shadow_color = (0, 0, 0)  # Black shadow
+        
+        # Get text size
+        (text_w, text_h), baseline = cv2.getTextSize(timestamp, font, font_scale, thickness)
+        
+        # Calculate position based on setting
+        h, w = frame.shape[:2]
+        padding = 10
+        
+        if self.config.timestamp_position == "top-left":
+            x, y = padding, text_h + padding
+        elif self.config.timestamp_position == "top-right":
+            x, y = w - text_w - padding, text_h + padding
+        elif self.config.timestamp_position == "bottom-right":
+            x, y = w - text_w - padding, h - padding
+        else:  # bottom-left (default)
+            x, y = padding, h - padding
+        
+        # Draw shadow for better visibility
+        cv2.putText(frame, timestamp, (x + 1, y + 1), font, font_scale, shadow_color, thickness + 1)
+        # Draw text
+        cv2.putText(frame, timestamp, (x, y), font, font_scale, color, thickness)
+        
+        return frame
     
     def restart_stream(self) -> bool:
         """Restart the video streamer with current config"""
