@@ -138,8 +138,13 @@ class PTZController:
         
         # Crop and resize
         cropped = frame[y1:y2, x1:x2]
-        output = cv2.resize(cropped, (self.output_width, self.output_height), 
-                           interpolation=cv2.INTER_LINEAR)
+        
+        # Only resize if necessary
+        if cropped.shape[1] != self.output_width or cropped.shape[0] != self.output_height:
+            output = cv2.resize(cropped, (self.output_width, self.output_height), 
+                               interpolation=cv2.INTER_LINEAR)
+        else:
+            output = cropped
         
         return output
     
@@ -152,14 +157,17 @@ class PTZController:
             dt = current_time - last_time
             last_time = current_time
             
+            # Quick check for movement without lock (small race acceptable)
+            has_movement = (abs(self.velocity.pan_speed) >= 0.001 or 
+                           abs(self.velocity.tilt_speed) >= 0.001 or
+                           abs(self.velocity.zoom_speed) >= 0.001)
+            
+            if not has_movement:
+                time.sleep(0.05)  # Sleep longer when idle
+                continue
+            
+            # Only acquire lock when actually updating position
             with self._lock:
-                # Check if any movement is active
-                if (abs(self.velocity.pan_speed) < 0.001 and 
-                    abs(self.velocity.tilt_speed) < 0.001 and
-                    abs(self.velocity.zoom_speed) < 0.001):
-                    time.sleep(0.01)
-                    continue
-                
                 # Apply velocity to position
                 speed_factor = 1.0  # Units per second at full speed
                 

@@ -11,8 +11,10 @@ from ipycam import IPCamera, CameraConfig
 
 
 def main():
+    
+    config = CameraConfig.load("camera_config.json")
     # Create camera with default settings
-    camera = IPCamera()
+    camera = IPCamera(config=config)
     
     if not camera.start():
         print("Failed to start camera")

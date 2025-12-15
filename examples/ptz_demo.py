@@ -89,12 +89,9 @@ def demo_ptz_sequence(camera):
 
 def main():
     # Create camera
-    config = CameraConfig(
-        name="PTZ Demo Camera",
-        main_width=1920,
-        main_height=1080,
-    )
-    camera = IPCamera(config)
+    config = CameraConfig.load("camera_config.json")
+    # Create camera with default settings
+    camera = IPCamera(config=config)
     
     if not camera.start():
         print("Failed to start camera")
@@ -131,6 +128,8 @@ def main():
     
     frame_count = 0
     start_time = time.time()
+    last_status_time = 0
+    cached_status = {'pan': 0.0, 'tilt': 0.0, 'zoom': 0.0, 'moving': False}
     
     try:
         while camera.is_running:
@@ -138,22 +137,31 @@ def main():
             if not ret:
                 break
             
-            # Get PTZ status for overlay
-            status = camera.ptz.get_status()
+            # Apply PTZ transformation first (crop/zoom)
+            frame = camera.ptz.apply_ptz(frame)
             
-            # Add PTZ status overlay
-            cv2.putText(frame, f"Pan: {status['pan']:+.2f}", (10, 30),
+            # Only update status display every 0.1 seconds to avoid lock contention
+            current_time = time.time()
+            if current_time - last_status_time > 0.1:
+                cached_status = camera.ptz.get_status()
+                last_status_time = current_time
+            
+            # Add PTZ status overlay to transformed frame (using cached values)
+            cv2.putText(frame, f"Pan: {cached_status['pan']:+.2f}", (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(frame, f"Tilt: {status['tilt']:+.2f}", (10, 60),
+            cv2.putText(frame, f"Tilt: {cached_status['tilt']:+.2f}", (10, 60),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(frame, f"Zoom: {status['zoom']:+.2f}", (10, 90),
+            cv2.putText(frame, f"Zoom: {cached_status['zoom']:+.2f}", (10, 90),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            if status['moving']:
+            if cached_status['moving']:
                 cv2.putText(frame, "MOVING", (10, 120),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
-            camera.stream(frame)
+            # Save transformed frame and stream it (bypass camera.stream to avoid double PTZ)
+            camera._last_frame = frame
+            if camera.streamer:
+                camera.streamer.stream(frame)
             frame_count += 1
             
             # Frame pacing

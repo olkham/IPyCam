@@ -129,6 +129,7 @@ class CameraConfig:
             filtered = {k: v for k, v in config_dict.items() if k in valid_fields}
             return cls(**filtered)
         except FileNotFoundError:
+            print(f"Config file '{filepath}' not found, using defaults")
             return cls()
         except Exception as e:
             print(f"Failed to load config: {e}")
