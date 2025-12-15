@@ -41,10 +41,6 @@ def main():
         camera.stop()
         return 1
     
-    start_time = time.time()
-    frame_count = 0
-    last_fps = camera.config.main_fps
-    
     try:
         while camera.is_running:
             ret, frame = cap.read()
@@ -53,21 +49,8 @@ def main():
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
             
+            # Stream handles PTZ, timestamp, and frame pacing automatically
             camera.stream(frame)
-            frame_count += 1
-            
-            # Check if FPS changed - reset timing
-            if camera.config.main_fps != last_fps:
-                last_fps = camera.config.main_fps
-                start_time = time.time()
-                frame_count = 1
-            
-            # Precise frame pacing (read FPS dynamically)
-            target_frame_time = 1.0 / camera.config.main_fps
-            expected_time = start_time + (frame_count * target_frame_time)
-            sleep_time = expected_time - time.time()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
                 
     except KeyboardInterrupt:
         print("\nShutting down...")

@@ -42,7 +42,6 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     
     frame_count = 0
-    start_time = time.time()
     
     try:
         while camera.is_running:
@@ -52,12 +51,7 @@ def main():
                 print("Error: Failed to read frame from webcam")
                 break
             
-            # Add timestamp overlay
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            cv2.putText(frame, timestamp, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Stream the frame
+            # Stream the frame (handles PTZ, timestamp, and pacing automatically)
             camera.stream(frame)
             frame_count += 1
             
@@ -67,15 +61,6 @@ def main():
                     print(f"Stats: {camera.stats.frames_sent} frames, "
                           f"{camera.stats.actual_fps:.1f} fps, "
                           f"{camera.stats.bitrate_mbps:.2f} Mbps")
-            
-            # Frame pacing
-            target_frame_time = 1.0 / camera.config.main_fps
-            elapsed = time.time() - start_time
-            expected_time = frame_count * target_frame_time
-            sleep_time = expected_time - elapsed
-            
-            if sleep_time > 0:
-                time.sleep(sleep_time)
     
     except KeyboardInterrupt:
         print("\nShutting down...")

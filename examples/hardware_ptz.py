@@ -213,10 +213,8 @@ def main():
             if not ret:
                 break
             
+            # Stream handles PTZ, timestamp, and frame pacing automatically
             camera.stream(frame)
-            
-            # Frame pacing
-            time.sleep(1.0 / config.main_fps)
     
     except KeyboardInterrupt:
         print("\nShutting down...")

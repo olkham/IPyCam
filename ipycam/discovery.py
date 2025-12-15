@@ -48,3 +48,21 @@ class WSDiscoveryServer(threading.Thread):
     
     def stop(self):
         self.running = False
+
+
+if __name__ == "__main__":
+    from ipycam.config import CameraConfig
+    from ipycam.onvif import ONVIFService
+    
+    config = CameraConfig.load()
+    onvif_service = ONVIFService(config)
+    discovery_server = WSDiscoveryServer(onvif_service)
+    discovery_server.start()
+    
+    print("WS-Discovery server running. Press Ctrl+C to stop.")
+    try:
+        while True:
+            pass
+    except KeyboardInterrupt:
+        print("Stopping WS-Discovery server...")
+        discovery_server.stop()

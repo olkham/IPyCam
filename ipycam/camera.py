@@ -67,6 +67,11 @@ class IPCamera:
         self._running = False
         self._restarting = False  # Flag to prevent loop exit during restart
         
+        # Frame pacing
+        self._frame_count = 0
+        self._stream_start_time: Optional[float] = None
+        self._last_fps = 0
+        
     def start(self) -> bool:
         """Start the IP camera (ONVIF, Web UI, and streaming)"""
         print(f"Starting IP Camera: {self.config.name}")
@@ -122,7 +127,7 @@ class IPCamera:
         print("IP Camera stopped")
     
     def stream(self, frame: np.ndarray) -> bool:
-        """Send a frame to the stream (applies PTZ transform, then timestamp)"""
+        """Send a frame to the stream (applies PTZ transform, timestamp, and frame pacing)"""
         # Apply PTZ transform first
         if self.ptz:
             frame = self.ptz.apply_ptz(frame)
@@ -132,9 +137,34 @@ class IPCamera:
             frame = self._draw_timestamp(frame)
         
         self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted + timestamp)
+        
+        # Send frame to streamer
+        result = False
         if self.streamer:
-            return self.streamer.stream(frame)
-        return False
+            result = self.streamer.stream(frame)
+        
+        # Frame pacing - maintain target FPS
+        self._pace_frame()
+        
+        return result
+    
+    def _pace_frame(self):
+        """Handle frame pacing to maintain target FPS"""
+        # Initialize or reset timing if FPS changed
+        if self._stream_start_time is None or self._last_fps != self.config.main_fps:
+            self._stream_start_time = time.time()
+            self._frame_count = 0
+            self._last_fps = self.config.main_fps
+        
+        self._frame_count += 1
+        
+        # Calculate expected time for this frame and sleep if ahead
+        target_frame_time = 1.0 / self.config.main_fps
+        expected_time = self._stream_start_time + (self._frame_count * target_frame_time)
+        sleep_time = expected_time - time.time()
+        
+        if sleep_time > 0:
+            time.sleep(sleep_time)
     
     def _draw_timestamp(self, frame: np.ndarray) -> np.ndarray:
         """Draw timestamp overlay on frame"""

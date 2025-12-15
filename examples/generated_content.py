@@ -55,7 +55,6 @@ def main():
     print("Press Ctrl+C to stop\n")
     
     frame_count = 0
-    start_time = time.time()
     
     try:
         while camera.is_running:
@@ -67,11 +66,7 @@ def main():
             cv2.putText(frame, text, (20, 50),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 3)
             
-            timestamp = time.strftime("%H:%M:%S")
-            cv2.putText(frame, timestamp, (20, 100),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-            
-            # Stream the frame
+            # Stream handles PTZ, timestamp, and frame pacing automatically
             camera.stream(frame)
             frame_count += 1
             
@@ -80,14 +75,6 @@ def main():
                 if camera.stats:
                     print(f"Stats: {camera.stats.frames_sent} frames, "
                           f"{camera.stats.actual_fps:.1f} fps")
-            
-            # Frame pacing
-            target_frame_time = 1.0 / config.main_fps
-            elapsed = time.time() - start_time
-            sleep_time = (frame_count * target_frame_time) - elapsed
-            
-            if sleep_time > 0:
-                time.sleep(sleep_time)
     
     except KeyboardInterrupt:
         print("\nShutting down...")
