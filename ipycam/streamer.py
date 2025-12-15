@@ -10,9 +10,10 @@ import subprocess
 import time
 import threading
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Deque
 from dataclasses import dataclass, field
 from enum import Enum
+from collections import deque
 
 
 class HWAccel(Enum):
@@ -43,12 +44,15 @@ class StreamConfig:
 
 @dataclass
 class StreamStats:
-    """Statistics for the current stream"""
+    """Statistics for the current stream with sliding window FPS calculation"""
     frames_sent: int = 0
     bytes_sent: int = 0
     start_time: float = field(default_factory=time.time)
     last_frame_time: float = 0
     dropped_frames: int = 0
+    # Sliding window for FPS calculation (stores timestamps)
+    _frame_timestamps: Deque[float] = field(default_factory=lambda: deque(maxlen=150))
+    _window_seconds: float = 5.0  # Calculate FPS over last 5 seconds
     
     @property
     def elapsed_time(self) -> float:
@@ -56,8 +60,28 @@ class StreamStats:
     
     @property
     def actual_fps(self) -> float:
-        if self.elapsed_time > 0:
-            return self.frames_sent / self.elapsed_time
+        """Calculate FPS over a sliding window of recent frames"""
+        if len(self._frame_timestamps) < 2:
+            return 0
+        
+        current_time = time.time()
+        # Find frames within the window
+        cutoff_time = current_time - self._window_seconds
+        
+        # Count frames in window
+        recent_frames = sum(1 for ts in self._frame_timestamps if ts >= cutoff_time)
+        
+        if recent_frames < 2:
+            return 0
+        
+        # Find oldest frame in window
+        oldest_in_window = next((ts for ts in self._frame_timestamps if ts >= cutoff_time), None)
+        if oldest_in_window is None:
+            return 0
+        
+        time_span = current_time - oldest_in_window
+        if time_span > 0:
+            return recent_frames / time_span
         return 0
     
     @property
@@ -65,6 +89,10 @@ class StreamStats:
         if self.elapsed_time > 0:
             return (self.bytes_sent * 8) / (self.elapsed_time * 1_000_000)
         return 0
+    
+    def record_frame(self, timestamp: float):
+        """Record a frame timestamp for FPS calculation"""
+        self._frame_timestamps.append(timestamp)
 
 
 class VideoStreamer:
@@ -197,9 +225,11 @@ class VideoStreamer:
                         self._ffmpeg_process.stdin.flush()
             
             # Update stats
+            current_time = time.time()
             self.stats.frames_sent += 1
             self.stats.bytes_sent += len(frame_bytes)
-            self.stats.last_frame_time = time.time()
+            self.stats.last_frame_time = current_time
+            self.stats.record_frame(current_time)
             
             return True
             
