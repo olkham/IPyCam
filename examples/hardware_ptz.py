@@ -159,10 +159,14 @@ class StepperMotorExample:
 
 
 def main():
-    """Demo: Hardware PTZ with digital PTZ fallback"""
+    """Demo: Hardware PTZ (digital PTZ disabled)"""
     
     config = CameraConfig.load("camera_config.json")
     camera = IPCamera(config=config)
+    
+    # Disable digital PTZ when using hardware controllers
+    # This prevents frame cropping and passes video through unchanged
+    camera.ptz.enable_digital_ptz = False
     
     # Add hardware handlers - you can add multiple!
     # Commands will be sent to ALL registered handlers
@@ -179,9 +183,8 @@ def main():
     # stepper = StepperMotorExample()
     # camera.ptz.add_hardware_handler(stepper)
     
-    # Note: Digital PTZ is still enabled by default
-    # To disable digital PTZ (hardware only), set:
-    # camera.ptz.enable_digital_ptz = False
+    # Note: To enable BOTH hardware and digital PTZ simultaneously, set:
+    # camera.ptz.enable_digital_ptz = True
     
     if not camera.start():
         print("Failed to start camera")
