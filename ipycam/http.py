@@ -176,11 +176,23 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         """Serve current frame as JPEG snapshot"""
         if self.camera._last_frame is not None:
             import cv2
-            _, jpeg = cv2.imencode('.jpg', self.camera._last_frame)
-            self.send_response(200)
-            self.send_header('Content-Type', 'image/jpeg')
-            self.end_headers()
-            self.wfile.write(jpeg.tobytes())
+            
+            # Encode with decent quality
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            success, jpeg = cv2.imencode('.jpg', self.camera._last_frame, encode_params)
+            
+            if success:
+                jpeg_bytes = jpeg.tobytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(jpeg_bytes)))
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                self.end_headers()
+                self.wfile.write(jpeg_bytes)
+            else:
+                self.send_error(500, "Failed to encode snapshot")
         else:
             self.send_error(503, "No frame available")
     
