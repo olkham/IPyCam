@@ -10,6 +10,8 @@ A virtual IP camera that:
 - Supports digital PTZ (ePTZ) via ONVIF
 
 Usage:
+    from ipycam import IPCamera, CameraConfig
+    
     camera = IPCamera()
     camera.start()
     
@@ -27,12 +29,12 @@ import socketserver
 import numpy as np
 from typing import Optional
 
-from camera_config import CameraConfig
-from video_streamer import VideoStreamer, StreamStats
-from onvif_service import ONVIFService
-from http_handler import IPCameraHTTPHandler
-from ws_discovery import WSDiscoveryServer
-from ptz_controller import PTZController
+from .config import CameraConfig
+from .streamer import VideoStreamer, StreamStats
+from .onvif import ONVIFService
+from .http import IPCameraHTTPHandler
+from .discovery import WSDiscoveryServer
+from .ptz import PTZController
 
 
 class IPCamera:
@@ -197,73 +199,3 @@ class IPCamera:
             html = html.replace(key, value)
         
         return html
-
-
-# Example usage
-if __name__ == "__main__":
-    import cv2
-    
-    # Load config from file, or use defaults if not found
-    config = CameraConfig.load("camera_config.json")
-    print(f"Loaded config: {config.name} ({config.main_width}x{config.main_height}@{config.main_fps}fps)")
-    
-    camera = IPCamera(config)
-    
-    if not camera.start():
-        print("Failed to start camera")
-        exit(1)
-    
-    print("\n" + "="*50)
-    print("IP Camera is running!")
-    print("="*50)
-    print(f"\nOpen Web UI: http://{config.local_ip}:{config.onvif_port}/")
-    print("Press Ctrl+C to stop\n")
-    
-    # Open video file as test source
-    cap = cv2.VideoCapture(0)
-    # Set camera resolution to 1920x1080
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    if not cap.isOpened():
-        print("Could not open vid2.mkv")
-        camera.stop()
-        exit(1)
-    
-    start_time = time.time()
-    frame_count = 0
-    last_fps = camera.config.main_fps
-    
-    try:
-        while camera.is_running:
-            ret, frame = cap.read()
-
-            if not ret:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-            
-            # Add timestamp
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            cv2.putText(frame, timestamp, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            camera.stream(frame)
-            frame_count += 1
-            
-            # Check if FPS changed - reset timing
-            if camera.config.main_fps != last_fps:
-                last_fps = camera.config.main_fps
-                start_time = time.time()
-                frame_count = 1
-            
-            # Precise frame pacing (read FPS dynamically)
-            target_frame_time = 1.0 / camera.config.main_fps
-            expected_time = start_time + (frame_count * target_frame_time)
-            sleep_time = expected_time - time.time()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-                
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-    finally:
-        cap.release()
-        camera.stop()

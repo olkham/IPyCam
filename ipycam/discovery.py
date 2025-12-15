@@ -6,7 +6,8 @@ import struct
 import threading
 import re
 import uuid
-from onvif_service import ONVIFService
+
+from .onvif import ONVIFService
 
 
 class WSDiscoveryServer(threading.Thread):

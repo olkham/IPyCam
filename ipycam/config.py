@@ -4,7 +4,8 @@
 import json
 import socket
 from dataclasses import dataclass, asdict
-from video_streamer import StreamConfig, HWAccel
+
+from .streamer import StreamConfig, HWAccel
 
 
 def get_local_ip() -> str:

@@ -4,23 +4,13 @@ Modular Video Streamer Class
 
 A clean, reusable video streamer that accepts frames from any source
 and pushes them to an RTMP endpoint (e.g., go2rtc) for RTSP redistribution.
-
-Usage:
-    streamer = VideoStreamer(width=1920, height=1080, fps=30)
-    streamer.start("rtmp://127.0.0.1:1935/video")
-    
-    while running:
-        frame = get_frame_from_somewhere()  # Your frame source
-        streamer.stream(frame)
-    
-    streamer.stop()
 """
 
 import subprocess
 import time
 import threading
 import numpy as np
-from typing import Optional, Literal, Tuple
+from typing import Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -335,12 +325,6 @@ class VideoStreamer:
         """Print FFmpeg stderr for debugging"""
         if self._ffmpeg_process and self._ffmpeg_process.stderr:
             try:
-                # Non-blocking read of available stderr
-                import select
-                if hasattr(select, 'select'):
-                    # Unix-like
-                    pass
-                # On Windows, just try to read what's available
                 self._ffmpeg_process.stderr.flush()
                 stderr = self._ffmpeg_process.stderr.read()
                 if stderr:
@@ -362,81 +346,3 @@ class VideoStreamer:
                 pass
             finally:
                 self._ffmpeg_process = None
-
-
-# Example usage and test
-if __name__ == "__main__":
-    import cv2
-    
-    print("Video Streamer Test")
-    print("===================")
-    
-    # Create streamer with custom config
-    config = StreamConfig(
-        width=1920,
-        height=1080,
-        fps=60,
-        bitrate="4M",
-        hw_accel=HWAccel.AUTO,
-    )
-    
-    streamer = VideoStreamer(config)
-    
-    # Start streaming
-    if not streamer.start(
-        rtmp_url="rtmp://127.0.0.1:1935/video_main",
-        rtmp_url_sub="rtmp://127.0.0.1:1935/video_sub"
-    ):
-        print("Failed to start streamer. Is go2rtc running?")
-        exit(1)
-    
-    print("\nStreaming from vid2.mkv...")
-    print("View at: rtsp://localhost:8554/video")
-    print("Press Ctrl+C to stop\n")
-    
-    # Open video file as test source
-    cap = cv2.VideoCapture("vid2.mkv")
-    if not cap.isOpened():
-        print("Could not open vid2.mkv")
-        streamer.stop()
-        exit(1)
-    
-    # Precise frame timing variables
-    target_frame_duration = 1.0 / config.fps
-    stream_start_time = time.time()
-    
-    try:
-        while streamer.is_running:
-            frame_start = time.time()
-            
-            ret, frame = cap.read()
-            if not ret:
-                # Loop video
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-            
-            # Add timestamp overlay
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            cv2.putText(frame, timestamp, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Stream the frame
-            if not streamer.stream(frame):
-                break
-            
-            # Print stats every 5 seconds
-            if streamer.stats.frames_sent % (config.fps * 5) == 0:
-                print(f"Frames: {streamer.stats.frames_sent}, "
-                      f"FPS: {streamer.stats.actual_fps:.1f}")
-            
-            # Precise frame pacing with drift correction
-            expected_time = stream_start_time + (streamer.stats.frames_sent * target_frame_duration)
-            sleep_time = expected_time - time.time()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            
-    except KeyboardInterrupt:
-        print("\nInterrupted by user")
-    finally:
-        cap.release()
-        streamer.stop()

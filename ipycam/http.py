@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from dataclasses import asdict
 
 if TYPE_CHECKING:
-    from ip_camera import IPCamera
+    from .camera import IPCamera
 
 
 class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):

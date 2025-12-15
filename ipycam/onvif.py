@@ -7,10 +7,10 @@ import time
 import uuid
 from typing import Dict, Optional, TYPE_CHECKING
 
-from camera_config import CameraConfig
+from .config import CameraConfig
 
 if TYPE_CHECKING:
-    from ptz_controller import PTZController
+    from .ptz import PTZController
 
 
 class ONVIFService:
@@ -127,7 +127,6 @@ class ONVIFService:
 
     def get_users(self) -> str:
         body = self._render('get_users')
-        return self._wrap_envelope(body)
         return self._wrap_envelope(body)
 
     def get_profiles(self) -> str:
