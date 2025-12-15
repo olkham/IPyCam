@@ -9,4 +9,10 @@
         <tds:XAddr>{{media_url}}</tds:XAddr>
         <tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>
     </tds:Service>
+    <tds:Service>
+        <tds:Namespace>http://www.onvif.org/ver20/ptz/wsdl</tds:Namespace>
+        <tds:XAddr>{{ptz_url}}</tds:XAddr>
+        <tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>
+    </tds:Service>
 </tds:GetServicesResponse>
+

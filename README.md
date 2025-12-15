@@ -22,30 +22,22 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 
 ### Installation
 
-#### Windows
 ```bash
-setup.bat
+pip install ipycam
 ```
 
-#### Linux/Mac
+Or install from source:
 ```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-Or manually:
-```bash
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-source .venv/bin/activate  # Linux/Mac
-pip install -r requirements.txt
+git clone https://github.com/yourname/ipycam.git
+cd ipycam
+pip install -e .
 ```
 
 ### Basic Usage
 
 ```python
 import cv2
-from ip_camera import IPCamera, CameraConfig
+from ipycam import IPCamera, CameraConfig
 
 # Create camera with custom config
 config = CameraConfig(
@@ -73,10 +65,10 @@ finally:
     camera.stop()
 ```
 
-### Running the Example
+### Running as a Module
 
 ```bash
-python ip_camera.py
+python -m ipycam
 ```
 
 Then access:
@@ -132,11 +124,19 @@ PTZ presets are stored in `ptz_presets.json`.
 
 ## Architecture
 
-- `ip_camera.py` - Main camera class with ONVIF and HTTP services
-- `video_streamer.py` - Async video encoding and streaming pipeline
-- `ptz_controller.py` - Digital PTZ implementation
-- `static/` - Web UI files
-- `go2rtc.exe` - RTSP/RTMP server (go2rtc)
+```
+ipycam/
+├── __init__.py       # Package exports
+├── __main__.py       # CLI entry point
+├── camera.py         # Main IPCamera class
+├── config.py         # CameraConfig dataclass
+├── streamer.py       # Video encoding and streaming pipeline
+├── ptz.py            # Digital PTZ implementation
+├── onvif.py          # ONVIF SOAP service
+├── discovery.py      # WS-Discovery server
+├── http.py           # HTTP request handler
+└── static/           # Web UI and SOAP templates
+```
 
 ## Troubleshooting
 

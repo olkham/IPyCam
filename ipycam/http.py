@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from dataclasses import asdict
 
 if TYPE_CHECKING:
-    from ip_camera import IPCamera
+    from .camera import IPCamera
 
 
 class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
@@ -31,6 +31,8 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.serve_config()
         elif path == '/api/stats':
             self.serve_stats()
+        elif path == '/api/ptz':
+            self.serve_ptz_status()
         elif path == '/snapshot.jpg':
             self.serve_snapshot()
         else:
@@ -43,6 +45,8 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.handle_onvif()
         elif path == '/api/config':
             self.update_config()
+        elif path == '/api/ptz':
+            self.update_ptz()
         elif path == '/api/restart':
             self.restart_stream()
         else:
@@ -57,13 +61,24 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             
             # Detect action from body if header is missing
             if not soap_action:
+                # Device and Media service actions
                 for action in ['GetDeviceInformation', 'GetSystemDateAndTime', 'GetCapabilities',
-                              'GetServices', 'GetProfiles', 'GetStreamUri', 'GetSnapshotUri',
-                              'GetVideoEncoderConfiguration', 'GetVideoSourceConfiguration',
-                              'GetAudioDecoderConfigurations', 'GetScopes']:
+                              'GetServices', 'GetServiceCapabilities', 'GetProfiles', 'GetStreamUri', 
+                              'GetSnapshotUri', 'GetVideoEncoderConfiguration', 'GetVideoSourceConfiguration',
+                              'GetAudioDecoderConfigurations', 'GetScopes', 'GetUsers']:
                     if action in body:
                         soap_action = action
                         break
+                
+                # PTZ service actions
+                if not soap_action:
+                    for action in ['GetNodes', 'GetNode', 'GetConfigurations', 'GetConfiguration',
+                                  'GetServiceCapabilities', 'GetStatus', 'ContinuousMove', 'Stop',
+                                  'AbsoluteMove', 'RelativeMove', 'GotoHomePosition',
+                                  'GetPresets', 'SetPreset', 'GotoPreset']:
+                        if action in body:
+                            soap_action = action
+                            break
             
             response = self.camera.onvif.handle_action(soap_action, body)
             
@@ -161,11 +176,23 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         """Serve current frame as JPEG snapshot"""
         if self.camera._last_frame is not None:
             import cv2
-            _, jpeg = cv2.imencode('.jpg', self.camera._last_frame)
-            self.send_response(200)
-            self.send_header('Content-Type', 'image/jpeg')
-            self.end_headers()
-            self.wfile.write(jpeg.tobytes())
+            
+            # Encode with decent quality
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            success, jpeg = cv2.imencode('.jpg', self.camera._last_frame, encode_params)
+            
+            if success:
+                jpeg_bytes = jpeg.tobytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(jpeg_bytes)))
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                self.end_headers()
+                self.wfile.write(jpeg_bytes)
+            else:
+                self.send_error(500, "Failed to encode snapshot")
         else:
             self.send_error(503, "No frame available")
     
@@ -225,6 +252,64 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+
+    def serve_ptz_status(self):
+        """Return current PTZ status as JSON"""
+        if self.camera.ptz:
+            status = self.camera.ptz.get_status()
+        else:
+            status = {'pan': 0, 'tilt': 0, 'zoom': 0, 'moving': False}
+        
+        response = json.dumps(status).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+    def update_ptz(self):
+        """Handle PTZ control commands"""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(body)
+            
+            action = data.get('action', '')
+            
+            if self.camera.ptz:
+                if action == 'zoom':
+                    # Relative zoom
+                    delta = float(data.get('delta', 0))
+                    self.camera.ptz.relative_move(zoom_delta=delta)
+                elif action == 'zoom_to':
+                    # Absolute zoom
+                    value = float(data.get('value', 0))
+                    self.camera.ptz.absolute_move(zoom=value)
+                elif action == 'home':
+                    self.camera.ptz.goto_home()
+                elif action == 'move':
+                    # Continuous move
+                    pan = float(data.get('pan', 0))
+                    tilt = float(data.get('tilt', 0))
+                    zoom = float(data.get('zoom', 0))
+                    self.camera.ptz.continuous_move(pan, tilt, zoom)
+                elif action == 'stop':
+                    self.camera.ptz.stop_movement()
+            
+            # Return current status
+            status = self.camera.ptz.get_status() if self.camera.ptz else {}
+            response = json.dumps({'success': True, **status}).encode('utf-8')
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+        except Exception as e:
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))

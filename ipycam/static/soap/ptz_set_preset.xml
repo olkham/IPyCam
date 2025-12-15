@@ -1,0 +1,3 @@
+<ptz:SetPresetResponse>
+    <ptz:PresetToken>{{preset_token}}</ptz:PresetToken>
+</ptz:SetPresetResponse>

@@ -1,6 +1,88 @@
 // IP Camera Web UI JavaScript
 
 /**
+ * PTZ Control Functions
+ */
+let ptzMoveTimeout = null;
+
+function ptzMove(pan, tilt) {
+    // Clear any pending stop
+    if (ptzMoveTimeout) {
+        clearTimeout(ptzMoveTimeout);
+        ptzMoveTimeout = null;
+    }
+    
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'move', pan: pan, tilt: tilt, zoom: 0 })
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function ptzStop() {
+    // Small delay to avoid rapid start/stop
+    ptzMoveTimeout = setTimeout(() => {
+        fetch('/api/ptz', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'stop' })
+        })
+        .catch(err => console.error('PTZ error:', err));
+        ptzMoveTimeout = null;
+    }, 50);
+}
+
+function ptzZoom(delta) {
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'zoom', delta: delta })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.zoom !== undefined) {
+            document.getElementById('zoom-slider').value = data.zoom * 100;
+        }
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function ptzZoomTo(percent) {
+    const value = parseFloat(percent) / 100;
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'zoom_to', value: value })
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function ptzHome() {
+    fetch('/api/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'home' })
+    })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('zoom-slider').value = 0;
+    })
+    .catch(err => console.error('PTZ error:', err));
+}
+
+function updatePtzStatus() {
+    fetch('/api/ptz')
+        .then(r => r.json())
+        .then(data => {
+            if (data.zoom !== undefined) {
+                document.getElementById('zoom-slider').value = data.zoom * 100;
+            }
+        })
+        .catch(() => {});
+}
+
+/**
  * Switch between main and sub stream preview
  */
 function switchStream(stream) {
@@ -52,7 +134,9 @@ function applyConfig() {
         sub_width: parseInt(subRes[0]),
         sub_height: parseInt(subRes[1]),
         sub_bitrate: document.getElementById('sub_bitrate').value,
-        hw_accel: document.getElementById('hw_accel').value
+        hw_accel: document.getElementById('hw_accel').value,
+        show_timestamp: document.getElementById('show_timestamp').checked,
+        timestamp_position: document.getElementById('timestamp_position').value
     };
     
     const statusEl = document.getElementById('apply-status');
@@ -132,6 +216,14 @@ function loadConfig() {
             for (let opt of hwAccelSelect.options) {
                 opt.selected = opt.value === config.hw_accel;
             }
+            
+            // Overlay settings
+            document.getElementById('show_timestamp').checked = config.show_timestamp !== false;
+            
+            const timestampPosSelect = document.getElementById('timestamp_position');
+            for (let opt of timestampPosSelect.options) {
+                opt.selected = opt.value === config.timestamp_position;
+            }
         })
         .catch(err => console.error('Failed to load config:', err));
 }
@@ -144,4 +236,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Load current config
     loadConfig();
+    
+    // Load PTZ status
+    updatePtzStatus();
 });

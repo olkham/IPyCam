@@ -4,7 +4,11 @@
 import json
 import socket
 from dataclasses import dataclass, asdict
-from video_streamer import StreamConfig, HWAccel
+
+try:
+    from .streamer import StreamConfig, HWAccel
+except ImportError:
+    from streamer import StreamConfig, HWAccel
 
 
 def get_local_ip() -> str:
@@ -54,6 +58,11 @@ class CameraConfig:
     
     # Encoding
     hw_accel: str = "auto"
+    
+    # Overlay
+    show_timestamp: bool = True
+    timestamp_format: str = "%Y-%m-%d %H:%M:%S"
+    timestamp_position: str = "bottom-left"  # top-left, top-right, bottom-left, bottom-right
     
     def __post_init__(self):
         if not self.local_ip:
@@ -128,6 +137,7 @@ class CameraConfig:
             filtered = {k: v for k, v in config_dict.items() if k in valid_fields}
             return cls(**filtered)
         except FileNotFoundError:
+            print(f"Config file '{filepath}' not found, using defaults")
             return cls()
         except Exception as e:
             print(f"Failed to load config: {e}")

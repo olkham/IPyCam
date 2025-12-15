@@ -1,0 +1,13 @@
+<ptz:GetStatusResponse>
+    <ptz:PTZStatus>
+        <tt:Position>
+            <tt:PanTilt x="{{pan}}" y="{{tilt}}" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"/>
+            <tt:Zoom x="{{zoom}}" space="http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"/>
+        </tt:Position>
+        <tt:MoveStatus>
+            <tt:PanTilt>{{pan_tilt_status}}</tt:PanTilt>
+            <tt:Zoom>{{zoom_status}}</tt:Zoom>
+        </tt:MoveStatus>
+        <tt:UtcTime>{{utc_time}}</tt:UtcTime>
+    </ptz:PTZStatus>
+</ptz:GetStatusResponse>

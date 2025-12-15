@@ -4,25 +4,16 @@ Modular Video Streamer Class
 
 A clean, reusable video streamer that accepts frames from any source
 and pushes them to an RTMP endpoint (e.g., go2rtc) for RTSP redistribution.
-
-Usage:
-    streamer = VideoStreamer(width=1920, height=1080, fps=30)
-    streamer.start("rtmp://127.0.0.1:1935/video")
-    
-    while running:
-        frame = get_frame_from_somewhere()  # Your frame source
-        streamer.stream(frame)
-    
-    streamer.stop()
 """
 
 import subprocess
 import time
 import threading
 import numpy as np
-from typing import Optional, Literal, Tuple
+from typing import Optional, Tuple, Deque
 from dataclasses import dataclass, field
 from enum import Enum
+from collections import deque
 
 
 class HWAccel(Enum):
@@ -40,7 +31,7 @@ class StreamConfig:
     fps: int = 30
     bitrate: str = "4M"
     keyframe_interval: Optional[int] = None  # Defaults to fps (1 second)
-    hw_accel: HWAccel = HWAccel.AUTO
+    hw_accel: HWAccel = HWAccel.QSV
     # Substream settings (used when rtmp_url_sub is provided)
     sub_width: int = 640
     sub_height: int = 480
@@ -53,12 +44,15 @@ class StreamConfig:
 
 @dataclass
 class StreamStats:
-    """Statistics for the current stream"""
+    """Statistics for the current stream with sliding window FPS calculation"""
     frames_sent: int = 0
     bytes_sent: int = 0
     start_time: float = field(default_factory=time.time)
     last_frame_time: float = 0
     dropped_frames: int = 0
+    # Sliding window for FPS calculation (stores timestamps)
+    _frame_timestamps: Deque[float] = field(default_factory=lambda: deque(maxlen=150))
+    _window_seconds: float = 5.0  # Calculate FPS over last 5 seconds
     
     @property
     def elapsed_time(self) -> float:
@@ -66,8 +60,28 @@ class StreamStats:
     
     @property
     def actual_fps(self) -> float:
-        if self.elapsed_time > 0:
-            return self.frames_sent / self.elapsed_time
+        """Calculate FPS over a sliding window of recent frames"""
+        if len(self._frame_timestamps) < 2:
+            return 0
+        
+        current_time = time.time()
+        # Find frames within the window
+        cutoff_time = current_time - self._window_seconds
+        
+        # Count frames in window
+        recent_frames = sum(1 for ts in self._frame_timestamps if ts >= cutoff_time)
+        
+        if recent_frames < 2:
+            return 0
+        
+        # Find oldest frame in window
+        oldest_in_window = next((ts for ts in self._frame_timestamps if ts >= cutoff_time), None)
+        if oldest_in_window is None:
+            return 0
+        
+        time_span = current_time - oldest_in_window
+        if time_span > 0:
+            return recent_frames / time_span
         return 0
     
     @property
@@ -75,6 +89,10 @@ class StreamStats:
         if self.elapsed_time > 0:
             return (self.bytes_sent * 8) / (self.elapsed_time * 1_000_000)
         return 0
+    
+    def record_frame(self, timestamp: float):
+        """Record a frame timestamp for FPS calculation"""
+        self._frame_timestamps.append(timestamp)
 
 
 class VideoStreamer:
@@ -100,6 +118,7 @@ class VideoStreamer:
         self.stats = StreamStats()
         self._active_hw_accel: Optional[str] = None
         self._rtmp_url: Optional[str] = None
+        self._ffmpeg_stderr_buffer = []
         
     @property
     def is_running(self) -> bool:
@@ -141,17 +160,27 @@ class VideoStreamer:
             hw_order = [self.config.hw_accel]
         
         for hw_type in hw_order:
+            print(f"Trying {hw_type.value.upper()}...")
             try:
+                # Reset stderr buffer for this attempt
+                self._ffmpeg_stderr_buffer = []
+                
                 self._start_ffmpeg(rtmp_url, rtmp_url_sub, hw_type)
                 if self._check_ffmpeg_running():
-                    self._active_hw_accel = hw_type.value
-                    self._is_running = True
-                    print(f"✓ Streamer started with {hw_type.value.upper()} acceleration")
-                    print(f"  Primary:   {rtmp_url}")
-                    if rtmp_url_sub:
-                        print(f"  Substream: {rtmp_url_sub}")
-                    return True
+                    # Warm-up: Send test frames to verify encoder actually works
+                    if self._warm_up_encoder():
+                        self._active_hw_accel = hw_type.value
+                        self._is_running = True
+                        print(f"✓ Streamer started with {hw_type.value.upper()} acceleration")
+                        print(f"  Primary:   {rtmp_url}")
+                        if rtmp_url_sub:
+                            print(f"  Substream: {rtmp_url_sub}")
+                        return True
+                    else:
+                        print(f"✗ {hw_type.value.upper()} encoder initialization failed")
+                        self._cleanup_ffmpeg()
                 else:
+                    print(f"✗ {hw_type.value.upper()} failed to start")
                     self._cleanup_ffmpeg()
             except Exception as e:
                 print(f"✗ {hw_type.value.upper()} failed: {e}")
@@ -207,9 +236,11 @@ class VideoStreamer:
                         self._ffmpeg_process.stdin.flush()
             
             # Update stats
+            current_time = time.time()
             self.stats.frames_sent += 1
             self.stats.bytes_sent += len(frame_bytes)
-            self.stats.last_frame_time = time.time()
+            self.stats.last_frame_time = current_time
+            self.stats.record_frame(current_time)
             
             return True
             
@@ -319,29 +350,126 @@ class VideoStreamer:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
         )
+        
+        # Store stderr for error checking
+        self._ffmpeg_stderr_buffer = []
+        
+        def read_stderr():
+            """Read stderr in background to detect errors early"""
+            if self._ffmpeg_process and self._ffmpeg_process.stderr:
+                try:
+                    for line in iter(self._ffmpeg_process.stderr.readline, b''):
+                        if line:
+                            self._ffmpeg_stderr_buffer.append(line)
+                            # Keep buffer from growing too large
+                            if len(self._ffmpeg_stderr_buffer) > 100:
+                                self._ffmpeg_stderr_buffer.pop(0)
+                except:
+                    pass
+        
+        # Start stderr reader thread
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
     
-    def _check_ffmpeg_running(self) -> bool:
-        """Check if FFmpeg started successfully"""
+    def _warm_up_encoder(self) -> bool:
+        """Send test frames to verify encoder works before declaring success"""
+        try:
+            # Create a black test frame
+            test_frame = np.zeros((self.config.height, self.config.width, 3), dtype=np.uint8)
+            frame_bytes = test_frame.tobytes()
+            
+            # Send 3 test frames
+            for i in range(3):
+                if self._ffmpeg_process and self._ffmpeg_process.stdin:
+                    self._ffmpeg_process.stdin.write(frame_bytes)
+                    self._ffmpeg_process.stdin.flush()
+                    time.sleep(0.05)
+                    
+                    # Check if process died
+                    if self._ffmpeg_process.poll() is not None:
+                        return False
+                    
+                    # Check for encoder errors in stderr
+                    if self._ffmpeg_stderr_buffer:
+                        stderr_text = b''.join(self._ffmpeg_stderr_buffer).decode('utf-8', errors='ignore').lower()
+                        error_patterns = [
+                            'driver does not support',
+                            'could not open encoder',
+                            'error while opening encoder',
+                            'error sending frames',
+                            'conversion failed',
+                        ]
+                        for pattern in error_patterns:
+                            if pattern in stderr_text:
+                                return False
+            
+            return True
+        except Exception as e:
+            print(f"  Warm-up failed: {e}")
+            return False
+    
+    def _check_ffmpeg_running(self, timeout: float = 2.0) -> bool:
+        """Check if FFmpeg started successfully with timeout"""
         if self._ffmpeg_process is None:
             return False
-        time.sleep(1.0)
+        
+        # Check periodically for errors
+        start_time = time.time()
+        check_interval = 0.2
+        
+        while time.time() - start_time < timeout:
+            # Check if process has exited with error
+            if self._ffmpeg_process.poll() is not None:
+                self._dump_ffmpeg_error()
+                return False
+            
+            # Check stderr buffer for critical errors
+            if hasattr(self, '_ffmpeg_stderr_buffer'):
+                stderr_text = b''.join(self._ffmpeg_stderr_buffer).decode('utf-8', errors='ignore').lower()
+                
+                # Look for specific error patterns that indicate failure
+                error_patterns = [
+                    'no nvenc capable devices found',
+                    'driver does not support',
+                    'required nvenc api version',
+                    'minimum required nvidia driver',
+                    'could not open encoder',
+                    'error while opening encoder',
+                    'cannot load',
+                    'invalid encoder',
+                    'unknown encoder',
+                    'encoder not found',
+                    'unsupported codec',
+                    'init failed',
+                    'initialization failed',
+                    'conversion failed',
+                    'nothing was written into output file',
+                ]
+                
+                for pattern in error_patterns:
+                    if pattern in stderr_text:
+                        print(f"  Detected error: {pattern}")
+                        return False
+            
+            time.sleep(check_interval)
+        
+        # After timeout, check one final time if process is still alive
         if self._ffmpeg_process.poll() is not None:
-            self._dump_ffmpeg_error()
             return False
+        
         return True
     
     def _dump_ffmpeg_error(self):
         """Print FFmpeg stderr for debugging"""
-        if self._ffmpeg_process and self._ffmpeg_process.stderr:
+        if hasattr(self, '_ffmpeg_stderr_buffer') and self._ffmpeg_stderr_buffer:
+            stderr_text = b''.join(self._ffmpeg_stderr_buffer).decode('utf-8', errors='ignore')
+            if stderr_text.strip():
+                print(f"FFmpeg error output:\n{stderr_text}")
+        elif self._ffmpeg_process and self._ffmpeg_process.stderr:
             try:
-                # Non-blocking read of available stderr
-                import select
-                if hasattr(select, 'select'):
-                    # Unix-like
-                    pass
-                # On Windows, just try to read what's available
-                self._ffmpeg_process.stderr.flush()
+                # Try to read remaining stderr
                 stderr = self._ffmpeg_process.stderr.read()
                 if stderr:
                     print(f"FFmpeg error output:\n{stderr.decode('utf-8', errors='ignore')}")
@@ -362,81 +490,3 @@ class VideoStreamer:
                 pass
             finally:
                 self._ffmpeg_process = None
-
-
-# Example usage and test
-if __name__ == "__main__":
-    import cv2
-    
-    print("Video Streamer Test")
-    print("===================")
-    
-    # Create streamer with custom config
-    config = StreamConfig(
-        width=1920,
-        height=1080,
-        fps=60,
-        bitrate="4M",
-        hw_accel=HWAccel.AUTO,
-    )
-    
-    streamer = VideoStreamer(config)
-    
-    # Start streaming
-    if not streamer.start(
-        rtmp_url="rtmp://127.0.0.1:1935/video_main",
-        rtmp_url_sub="rtmp://127.0.0.1:1935/video_sub"
-    ):
-        print("Failed to start streamer. Is go2rtc running?")
-        exit(1)
-    
-    print("\nStreaming from vid2.mkv...")
-    print("View at: rtsp://localhost:8554/video")
-    print("Press Ctrl+C to stop\n")
-    
-    # Open video file as test source
-    cap = cv2.VideoCapture("vid2.mkv")
-    if not cap.isOpened():
-        print("Could not open vid2.mkv")
-        streamer.stop()
-        exit(1)
-    
-    # Precise frame timing variables
-    target_frame_duration = 1.0 / config.fps
-    stream_start_time = time.time()
-    
-    try:
-        while streamer.is_running:
-            frame_start = time.time()
-            
-            ret, frame = cap.read()
-            if not ret:
-                # Loop video
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-            
-            # Add timestamp overlay
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            cv2.putText(frame, timestamp, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Stream the frame
-            if not streamer.stream(frame):
-                break
-            
-            # Print stats every 5 seconds
-            if streamer.stats.frames_sent % (config.fps * 5) == 0:
-                print(f"Frames: {streamer.stats.frames_sent}, "
-                      f"FPS: {streamer.stats.actual_fps:.1f}")
-            
-            # Precise frame pacing with drift correction
-            expected_time = stream_start_time + (streamer.stats.frames_sent * target_frame_duration)
-            sleep_time = expected_time - time.time()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            
-    except KeyboardInterrupt:
-        print("\nInterrupted by user")
-    finally:
-        cap.release()
-        streamer.stop()
