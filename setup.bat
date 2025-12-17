@@ -13,7 +13,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/3] Creating virtual environment...
+echo [1/4] Creating virtual environment...
 if exist .venv (
     echo Virtual environment already exists, skipping creation
 ) else (
@@ -27,7 +27,7 @@ if exist .venv (
 )
 echo.
 
-echo [2/3] Activating virtual environment...
+echo [2/4] Activating virtual environment...
 call .venv\Scripts\activate.bat
 if errorlevel 1 (
     echo ERROR: Failed to activate virtual environment
@@ -36,11 +36,20 @@ if errorlevel 1 (
 )
 echo.
 
-echo [3/3] Installing dependencies...
+echo [3/4] Installing dependencies...
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 if errorlevel 1 (
     echo ERROR: Failed to install dependencies
+    pause
+    exit /b 1
+)
+echo.
+
+echo [4/4] Installing IPyCam package...
+pip install -e .
+if errorlevel 1 (
+    echo ERROR: Failed to install IPyCam package
     pause
     exit /b 1
 )
@@ -54,6 +63,6 @@ echo To activate the environment, run:
 echo   .venv\Scripts\activate
 echo.
 echo To run the camera, use:
-echo   python ip_camera.py
+echo   python -m ipycam
 echo.
 pause

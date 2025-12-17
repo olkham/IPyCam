@@ -12,7 +12,7 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-echo "[1/3] Creating virtual environment..."
+echo "[1/4] Creating virtual environment..."
 if [ -d ".venv" ]; then
     echo "Virtual environment already exists, skipping creation"
 else
@@ -25,7 +25,7 @@ else
 fi
 echo
 
-echo "[2/3] Activating virtual environment..."
+echo "[2/4] Activating virtual environment..."
 source .venv/bin/activate
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to activate virtual environment"
@@ -33,11 +33,19 @@ if [ $? -ne 0 ]; then
 fi
 echo
 
-echo "[3/3] Installing dependencies..."
+echo "[3/4] Installing dependencies..."
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to install dependencies"
+    exit 1
+fi
+echo
+
+echo "[4/4] Installing IPyCam package..."
+pip install -e .
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to install IPyCam package"
     exit 1
 fi
 echo
@@ -50,5 +58,5 @@ echo "To activate the environment, run:"
 echo "  source .venv/bin/activate"
 echo
 echo "To run the camera, use:"
-echo "  python ip_camera.py"
+echo "  python -m ipycam"
 echo

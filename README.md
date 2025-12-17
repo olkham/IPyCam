@@ -20,6 +20,15 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 
 ## Quick Start
 
+### Prerequisites
+
+1. **Install go2rtc**: Download the latest release from [go2rtc releases](https://github.com/AlexxIT/go2rtc/releases)
+2. **Start go2rtc** with the IPyCam configuration:
+   ```bash
+   go2rtc.exe --config ipycam\go2rtc.yaml
+   ```
+   Keep this running in a separate terminal.
+
 ### Installation
 
 Install directly from GitHub:
@@ -89,6 +98,17 @@ Then access:
 - **RTSP Main Stream**: rtsp://localhost:8554/video_main
 - **RTSP Sub Stream**: rtsp://localhost:8554/video_sub
 - **ONVIF Service**: http://localhost:8080/onvif/device_service
+
+### Testing the Stream
+
+Test the RTSP streams using ffplay:
+```bash
+# Test main stream
+ffplay rtsp://localhost:8554/video_main
+
+# Test sub stream
+ffplay rtsp://localhost:8554/video_sub
+```
 
 ## Configuration
 
