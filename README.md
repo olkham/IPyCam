@@ -22,15 +22,28 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 
 ### Installation
 
+Install directly from GitHub:
 ```bash
-pip install ipycam
+pip install git+https://github.com/olkham/IPyCam.git
 ```
 
 Or install from source:
 ```bash
-git clone https://github.com/yourname/ipycam.git
+git clone https://github.com/olkham/IPyCam.git
 cd ipycam
 pip install -e .
+```
+
+**Optional: 360° Camera Support**
+
+For the `360_ptz.py` example with equirectangular projection:
+```bash
+pip install "ipycam[camera360] @ git+https://github.com/olkham/IPyCam.git"
+```
+or install FrameSource separately:
+```bash
+pip install git+https://github.com/olkham/IPyCam.git
+pip install git+https://github.com/olkham/FrameSource.git
 ```
 
 ### Basic Usage
