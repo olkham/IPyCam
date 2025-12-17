@@ -11,7 +11,7 @@ body {
 }
 
 .container {
-    max-width: 1200px;
+    max-width: 1900px;
     margin: 0 auto;
     padding: 20px;
 }
@@ -29,7 +29,7 @@ h2 {
 
 .grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 2fr 1fr;
     gap: 20px;
 }
 
@@ -49,7 +49,7 @@ h2 {
 
 .preview iframe {
     width: 100%;
-    height: 400px;
+    height: 700px;
     border: none;
 }
 

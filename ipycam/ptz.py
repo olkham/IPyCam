@@ -144,6 +144,7 @@ class PTZController:
         
         # Fast check flag - True when PTZ is at default position (no transform needed)
         self._is_default = True
+        self.wrap_pan = False
         
         self._lock = threading.Lock()
         self._movement_thread: Optional[threading.Thread] = None
@@ -311,7 +312,14 @@ class PTZController:
                 self.state.zoom += self.velocity.zoom_speed * speed_factor * dt
                 
                 # Clamp values
-                self.state.pan = max(-1.0, min(1.0, self.state.pan))
+                # if self.wrap_pan:
+                #     if self.state.pan < -1.0:
+                #         self.state.pan += 2.0
+                #     elif self.state.pan > 1.0:
+                #         self.state.pan -= 2.0
+                if not self.wrap_pan:
+                    self.state.pan = max(-1.0, min(1.0, self.state.pan))
+                    
                 self.state.tilt = max(-1.0, min(1.0, self.state.tilt))
                 self.state.zoom = max(0.0, min(1.0, self.state.zoom))
                 
@@ -352,7 +360,8 @@ class PTZController:
         """Move to absolute position"""
         with self._lock:
             if pan is not None:
-                self.state.pan = max(-1.0, min(1.0, pan))
+                if not self.wrap_pan:
+                    self.state.pan = max(-1.0, min(1.0, pan))
             if tilt is not None:
                 self.state.tilt = max(-1.0, min(1.0, tilt))
             if zoom is not None:
@@ -371,7 +380,8 @@ class PTZController:
                      zoom_delta: float = 0.0):
         """Move relative to current position"""
         with self._lock:
-            self.state.pan = max(-1.0, min(1.0, self.state.pan + pan_delta))
+            if not self.wrap_pan:
+                self.state.pan = max(-1.0, min(1.0, self.state.pan + pan_delta))
             self.state.tilt = max(-1.0, min(1.0, self.state.tilt + tilt_delta))
             self.state.zoom = max(0.0, min(1.0, self.state.zoom + zoom_delta))
             # Stop any continuous movement

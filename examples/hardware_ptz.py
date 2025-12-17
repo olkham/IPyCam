@@ -166,7 +166,7 @@ def main():
     
     # Disable digital PTZ when using hardware controllers
     # This prevents frame cropping and passes video through unchanged
-    camera.ptz.enable_digital_ptz = False
+    camera.ptz.enable_digital_ptz = True
     
     # Add hardware handlers - you can add multiple!
     # Commands will be sent to ALL registered handlers

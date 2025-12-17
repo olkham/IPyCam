@@ -114,6 +114,25 @@ python hardware_ptz.py
 
 ---
 
+### 7. 360° Virtual PTZ (`360_ptz.py`)
+Stream a 360° equirectangular video as a virtual PTZ camera.
+
+```bash
+python 360_ptz.py
+```
+
+**What it demonstrates:**
+- Equirectangular to pinhole projection
+- Using 360° video as camera source
+- Virtual PTZ without physical camera movement
+- Real-time spherical coordinate transformations
+- PTZ controls mapped to viewing angles (pan → yaw, tilt → pitch, zoom → FOV)
+
+**Requirements:**
+- A 360° video file in equirectangular format (place in project root as `360_recording_20251215_215722.mp4` or update the path in the script)
+
+---
+
 ## Accessing the Streams
 
 Once any example is running, you can access:
