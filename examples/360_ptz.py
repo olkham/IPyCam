@@ -53,11 +53,16 @@ def main():
     print("\nPress Ctrl+C to stop\n")
     
     # Open 360° video file
-    video_path = "birds.mp4"
-    cap = FrameSourceFactory.create('video_file', source=video_path, threaded=False, loop=True, connect=True)
+    # video_path = "birds.mp4"
+    # cap = FrameSourceFactory.create('video_file', source=video_path, threaded=False, loop=True, connect=True)
+    cap = FrameSourceFactory.create('webcam', source=1, threaded=False, loop=True, connect=True)
+    
+    # Set camera resolution for Insta360 X5 webcam mode
+    cap.set_frame_size(2880, 1440)
+    cap.set_fps(30)
     
     if not cap.isOpened():
-        print(f"Error: Could not open 360° video: {video_path}")
+        print(f"Error: Could not open 360° source")
         ipycamera.stop()
         return
    
