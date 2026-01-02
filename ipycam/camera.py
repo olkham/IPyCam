@@ -100,6 +100,7 @@ class IPCamera:
         if not self.streamer.start(self.config.main_stream_rtmp, self.config.sub_stream_rtmp):
             print("  ✗ Failed to start video streamer")
             print("    Check that go2rtc is running and configured correctly")
+            print("    run using: go2rtc --config ipycam\\go2rtc.yaml")
             return False
         
         print(f"  Main Stream: {self.config.main_stream_rtsp}")
