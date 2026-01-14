@@ -39,6 +39,11 @@ from .discovery import WSDiscoveryServer
 from .ptz import PTZController
 
 
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 class IPCamera:
     """
     Pure Python IP Camera
@@ -84,7 +89,7 @@ class IPCamera:
         
         # Start HTTP server (ONVIF + Web UI)
         IPCameraHTTPHandler.camera = self
-        self._http_server = socketserver.ThreadingTCPServer(
+        self._http_server = ReusableThreadingTCPServer(
             ('', self.config.onvif_port), 
             IPCameraHTTPHandler
         )
@@ -97,10 +102,11 @@ class IPCamera:
         stream_config = self.config.to_stream_config()
         self.streamer = VideoStreamer(stream_config)
         
-        if not self.streamer.start(self.config.main_stream_rtmp, self.config.sub_stream_rtmp):
+        # Use RTSP push to avoid go2rtc FLV/rtmp panic issues
+        if not self.streamer.start(self.config.main_stream_push_url, self.config.sub_stream_push_url):
             print("  ✗ Failed to start video streamer")
             print("    Check that go2rtc is running and configured correctly")
-            print("    run using: go2rtc --config ipycam\\go2rtc.yaml")
+            print("    run using: go2rtc --config ipycam/go2rtc.yaml")
             return False
         
         print(f"  Main Stream: {self.config.main_stream_rtsp}")
@@ -125,6 +131,7 @@ class IPCamera:
         
         if self._http_server:
             self._http_server.shutdown()
+            self._http_server.server_close()
         
         print("IP Camera stopped")
     

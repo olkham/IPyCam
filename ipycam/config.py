@@ -75,6 +75,14 @@ class CameraConfig:
     @property
     def sub_stream_rtmp(self) -> str:
         return f"rtmp://127.0.0.1:{self.rtmp_port}/{self.sub_stream_name}"
+
+    @property
+    def main_stream_push_url(self) -> str:
+        return f"rtsp://127.0.0.1:{self.rtsp_port}/{self.main_stream_name}"
+    
+    @property
+    def sub_stream_push_url(self) -> str:
+        return f"rtsp://127.0.0.1:{self.rtsp_port}/{self.sub_stream_name}"
     
     @property
     def main_stream_rtsp(self) -> str:

@@ -321,12 +321,22 @@ class VideoStreamer:
             "-b:v", self.config.bitrate,
             "-maxrate", self.config.bitrate,
             "-bufsize", "8M",
-            "-flags", "+global_header",
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts+flush_packets",
-            "-f", "flv",
-            rtmp_url,
         ])
+
+        if rtmp_url.startswith("rtsp://"):
+             cmd.extend([
+                "-f", "rtsp",
+                "-rtsp_transport", "tcp",
+                rtmp_url,
+            ])
+        else:
+            cmd.extend([
+                "-flags", "+global_header",
+                "-f", "flv",
+                rtmp_url,
+            ])
         
         # Add substream output if requested
         if rtmp_url_sub:
@@ -335,14 +345,25 @@ class VideoStreamer:
                 "-pix_fmt", "yuv420p",
             ])
             cmd.extend(config["extra_encode"])
+            
             cmd.extend([
                 "-s", f"{self.config.sub_width}x{self.config.sub_height}",
                 "-b:v", self.config.sub_bitrate,
                 "-g", str(self.config.keyframe_interval),
-                "-flags", "+global_header",
-                "-f", "flv",
-                rtmp_url_sub,
             ])
+
+            if rtmp_url_sub.startswith("rtsp://"):
+                cmd.extend([
+                    "-f", "rtsp",
+                    "-rtsp_transport", "tcp",
+                    rtmp_url_sub,
+                ])
+            else:
+                cmd.extend([
+                    "-flags", "+global_header",
+                    "-f", "flv",
+                    rtmp_url_sub,
+                ])
         
         # Start FFmpeg
         self._ffmpeg_process = subprocess.Popen(

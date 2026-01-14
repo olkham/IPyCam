@@ -83,3 +83,39 @@ dmypy.json
 # Local config
 camera_config.json
 ptz_presets.json
+
+# video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.ts
+*.webm
+*.rmvb
+*.wmv
+*.3gp
+*.gif
+*.h264
+*.264
+*.mjpeg
+*.mjpg
+*.yuv
+*.raw
+*.y4m
+*.dav
+*.asf
+*.vob
+*.f4v
+*.m4v
+*.rm
+*.divx
+*.ogv
+*.mts
+
+#go2rtc binaries
+go2rtc_linux_amd64
+go2rtc_linux_arm64
+go2rtc_windows_amd64.exe
+go2rtc_darwin_amd64
+go2rtc_darwin_arm64
