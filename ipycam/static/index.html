@@ -14,12 +14,15 @@
             <div>
                 <div class="card preview" id="preview-container">
                     <iframe id="preview-iframe" src="{{preview_url}}" data-main-stream="{{main_stream_name}}" data-sub-stream="{{sub_stream_name}}" data-api-url="{{webrtc_url}}" allowfullscreen></iframe>
+                    <img id="preview-mjpeg" src="" style="display: none; width: 100%; height: 700px; object-fit: contain;" alt="MJPEG Stream">
                 </div>
                 <div class="preview-toolbar">
                     <div class="stream-switcher">
-                        <button class="btn-stream active" data-stream="main" onclick="switchStream('main')">Main</button>
-                        <button class="btn-stream" data-stream="sub" onclick="switchStream('sub')">Sub</button>
+                        <button class="btn-stream active" data-stream="main" data-type="rtc" onclick="switchStream('main', 'rtc')">Main</button>
+                        <button class="btn-stream" data-stream="sub" data-type="rtc" onclick="switchStream('sub', 'rtc')">Sub</button>
+                        <button class="btn-stream" data-stream="mjpeg" data-type="mjpeg" onclick="switchStream('mjpeg', 'mjpeg')">MJPEG</button>
                     </div>
+                    <div id="stream-mode-indicator" class="stream-mode-indicator"></div>
                 </div>
                 <div class="stats">
                     <div class="stat">
@@ -71,10 +74,11 @@
                 
                 <h2>Stream URLs</h2>
                 <div class="url-list">
-                    <div><span>Main RTSP:</span> {{main_rtsp}}</div>
-                    <div><span>Sub RTSP:</span> {{sub_rtsp}}</div>
-                    <div><span>ONVIF:</span> {{onvif_url}}</div>
-                    <div><span>WebRTC:</span> {{webrtc_url}}</div>
+                    <div><span>Main RTSP:</span> <a href="{{main_rtsp}}" target="_blank">{{main_rtsp}}</a></div>
+                    <div><span>Sub RTSP:</span> <a href="{{sub_rtsp}}" target="_blank">{{sub_rtsp}}</a></div>
+                    <div><span>ONVIF:</span> <a href="{{onvif_url}}" target="_blank">{{onvif_url}}</a></div>
+                    <div><span>WebRTC:</span> <a href="{{webrtc_url}}" target="_blank">{{webrtc_url}}</a></div>
+                    <div><span>MJPEG:</span> <a href="{{mjpeg_url}}" target="_blank" id="mjpeg-url">{{mjpeg_url}}</a></div>
                 </div>
                 
                 <h2>Main Stream</h2>

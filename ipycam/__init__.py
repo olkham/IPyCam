@@ -31,6 +31,7 @@ from .ptz import PTZController, PTZState, PTZPreset, PTZHardwareHandler, PTZVelo
 from .onvif import ONVIFService
 from .discovery import WSDiscoveryServer
 from .http import IPCameraHTTPHandler
+from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
 
 __all__ = [
     # Main classes
@@ -41,6 +42,10 @@ __all__ = [
     "StreamConfig",
     "StreamStats",
     "HWAccel",
+    # MJPEG fallback
+    "MJPEGStreamer",
+    "check_go2rtc_running",
+    "check_rtsp_port_available",
     # PTZ
     "PTZController",
     "PTZState",

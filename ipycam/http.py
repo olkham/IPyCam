@@ -35,6 +35,8 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.serve_ptz_status()
         elif path == '/snapshot.jpg':
             self.serve_snapshot()
+        elif path == f'/{self.camera.config.mjpeg_url}':
+            self.serve_mjpeg_stream()
         else:
             self.send_error(404)
     
@@ -148,6 +150,10 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         config_dict['main_stream_rtsp'] = self.camera.config.main_stream_rtsp
         config_dict['sub_stream_rtsp'] = self.camera.config.sub_stream_rtsp
         config_dict['webrtc_url'] = self.camera.config.webrtc_url
+        # Add streaming mode info
+        config_dict['streaming_mode'] = 'mjpeg' if self.camera.using_mjpeg_fallback else 'go2rtc'
+        # Always include full MJPEG URL
+        config_dict['mjpeg_url'] = f"http://{self.camera.config.local_ip}:{self.camera.config.onvif_port}/stream.mjpeg"
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -157,7 +163,19 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
     def serve_stats(self):
         """Serve streaming stats as JSON"""
         stats = {}
-        if self.camera.streamer:
+        if self.camera.using_mjpeg_fallback:
+            # MJPEG mode stats
+            mjpeg = self.camera.mjpeg_streamer
+            stats = {
+                'frames_sent': mjpeg.frames_sent if mjpeg else 0,
+                'actual_fps': round(mjpeg.actual_fps, 1) if mjpeg else 0,
+                'elapsed_time': round(mjpeg.elapsed_time, 1) if mjpeg else 0,
+                'dropped_frames': 0,
+                'is_streaming': mjpeg.is_running if mjpeg else False,
+                'streaming_mode': 'mjpeg',
+                'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
+            }
+        elif self.camera.streamer:
             s = self.camera.streamer.stats
             stats = {
                 'frames_sent': s.frames_sent,
@@ -165,6 +183,7 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 'elapsed_time': round(s.elapsed_time, 1),
                 'dropped_frames': s.dropped_frames,
                 'is_streaming': self.camera.streamer.is_running,
+                'streaming_mode': 'go2rtc',
             }
         
         self.send_response(200)
@@ -195,6 +214,34 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(500, "Failed to encode snapshot")
         else:
             self.send_error(503, "No frame available")
+    
+    def serve_mjpeg_stream(self):
+        """Serve live MJPEG stream (native fallback mode)"""
+        if not self.camera.mjpeg_streamer:
+            self.send_error(503, "MJPEG streaming not available")
+            return
+        
+        try:
+            # Send response headers
+            self.send_response(200)
+            for header_name, header_value in self.camera.mjpeg_streamer.get_headers():
+                self.send_header(header_name, header_value)
+            self.end_headers()
+            
+            # Register this client with the MJPEG streamer
+            client = self.camera.mjpeg_streamer.add_client(self.wfile)
+            
+            # Keep connection alive while client is connected
+            # The actual frame writing happens in the camera's stream() method
+            while client.connected and self.camera.is_running:
+                import time
+                time.sleep(0.1)
+                
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # Client disconnected
+        finally:
+            if self.camera.mjpeg_streamer and 'client' in dir():
+                self.camera.mjpeg_streamer.remove_client(client)
     
     def update_config(self):
         """Update camera configuration"""

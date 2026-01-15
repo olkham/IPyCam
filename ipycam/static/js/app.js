@@ -1,6 +1,14 @@
 // IP Camera Web UI JavaScript
 
 /**
+ * Stream state management
+ */
+let currentStreamType = 'rtc';  // 'rtc' or 'mjpeg'
+let currentStream = 'main';     // 'main', 'sub', or 'mjpeg'
+let streamingMode = 'go2rtc';   // 'go2rtc' or 'mjpeg' (server mode)
+let mjpegUrl = '';
+
+/**
  * PTZ Control Functions
  */
 let ptzMoveTimeout = null;
@@ -83,21 +91,109 @@ function updatePtzStatus() {
 }
 
 /**
- * Switch between main and sub stream preview
+ * Switch between stream types and sources
+ * @param {string} stream - 'main', 'sub', or 'mjpeg'
+ * @param {string} type - 'rtc' or 'mjpeg'
  */
-function switchStream(stream) {
+function switchStream(stream, type) {
+    // Block RTC streams if in MJPEG-only mode
+    if (type === 'rtc' && streamingMode === 'mjpeg') {
+        return;  // Don't switch - RTC not available
+    }
+    
     const iframe = document.getElementById('preview-iframe');
+    const mjpegImg = document.getElementById('preview-mjpeg');
     const mainStream = iframe.dataset.mainStream;
     const subStream = iframe.dataset.subStream;
     const apiUrl = iframe.dataset.apiUrl;
     
-    const streamName = stream === 'sub' ? subStream : mainStream;
-    iframe.src = `${apiUrl}/stream.html?src=${streamName}`;
+    currentStream = stream;
+    currentStreamType = type;
+    
+    if (type === 'mjpeg' || stream === 'mjpeg') {
+        // Switch to MJPEG mode - always use native MJPEG endpoint
+        iframe.style.display = 'none';
+        mjpegImg.style.display = 'block';
+        // Use full URL from mjpegUrl, or construct from current location
+        const mjpegSrc = mjpegUrl || (window.location.origin + '/stream.mjpeg');
+        mjpegImg.src = mjpegSrc;
+        currentStreamType = 'mjpeg';
+        currentStream = 'mjpeg';
+    } else {
+        // Switch to WebRTC mode
+        mjpegImg.style.display = 'none';
+        mjpegImg.src = '';  // Stop MJPEG loading
+        iframe.style.display = 'block';
+        const streamName = stream === 'sub' ? subStream : mainStream;
+        iframe.src = `${apiUrl}/stream.html?src=${streamName}`;
+    }
     
     // Update button states
     document.querySelectorAll('.btn-stream').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.stream === stream);
+        const btnStream = btn.dataset.stream;
+        const btnType = btn.dataset.type;
+        const isActive = (stream === 'mjpeg' && btnStream === 'mjpeg') ||
+                        (stream !== 'mjpeg' && btnStream === stream && btnType === type);
+        btn.classList.toggle('active', isActive);
     });
+}
+
+/**
+ * Check if WebRTC/go2rtc is available and fallback to MJPEG if not
+ */
+function checkStreamAvailability() {
+    fetch('/api/config')
+        .then(r => r.json())
+        .then(config => {
+            streamingMode = config.streaming_mode || 'go2rtc';
+            
+            // Use full MJPEG URL from config, or construct from current location
+            if (config.mjpeg_url && config.mjpeg_url.startsWith('http')) {
+                mjpegUrl = config.mjpeg_url;
+            } else {
+                mjpegUrl = window.location.origin + '/stream.mjpeg';
+            }
+            
+            // Update MJPEG URL display (both text and href)
+            const mjpegUrlEl = document.getElementById('mjpeg-url');
+            if (mjpegUrlEl) {
+                mjpegUrlEl.textContent = mjpegUrl;
+                mjpegUrlEl.href = mjpegUrl;
+            }
+            
+            // Update mode indicator
+            updateStreamModeIndicator();
+            
+            // If server is in MJPEG-only mode, switch to MJPEG and disable RTC buttons
+            if (streamingMode === 'mjpeg') {
+                switchStream('mjpeg', 'mjpeg');
+                
+                // Disable RTC buttons visually
+                document.querySelectorAll('.btn-stream[data-type="rtc"]').forEach(btn => {
+                    btn.classList.add('disabled');
+                    btn.title = 'WebRTC unavailable - go2rtc not running';
+                });
+            }
+        })
+        .catch(err => console.error('Failed to check stream availability:', err));
+}
+
+/**
+ * Update the stream mode indicator badge
+ */
+function updateStreamModeIndicator() {
+    const indicator = document.getElementById('stream-mode-indicator');
+    if (!indicator) return;
+    
+    if (streamingMode === 'mjpeg') {
+        indicator.textContent = 'MJPEG Only';
+        indicator.className = 'stream-mode-indicator mode-mjpeg';
+        indicator.title = 'go2rtc not detected - RTSP/WebRTC unavailable';
+    } else {
+        indicator.textContent = 'go2rtc';
+        indicator.className = 'stream-mode-indicator mode-go2rtc';
+        indicator.title = 'Full streaming available (RTSP/WebRTC/MJPEG)';
+    }
 }
 
 /**
@@ -112,6 +208,12 @@ function updateStats() {
             document.getElementById('uptime').textContent = data.elapsed_time ? Math.floor(data.elapsed_time) + 's' : '-';
             document.getElementById('dropped').textContent = data.dropped_frames || '0';
             document.getElementById('status').className = 'status ' + (data.is_streaming ? 'online' : 'offline');
+            
+            // Update streaming mode if changed
+            if (data.streaming_mode && data.streaming_mode !== streamingMode) {
+                streamingMode = data.streaming_mode;
+                updateStreamModeIndicator();
+            }
         })
         .catch(err => {
             console.error('Failed to fetch stats:', err);
@@ -230,6 +332,9 @@ function loadConfig() {
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
+    // Check stream availability first (may switch to MJPEG mode)
+    checkStreamAvailability();
+    
     // Start stats update interval
     setInterval(updateStats, 1000);
     updateStats();

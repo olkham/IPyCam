@@ -56,6 +56,9 @@ class CameraConfig:
     sub_bitrate: str = "1M"
     sub_stream_name: str = "video_sub"
     
+    #mjpeg fallback
+    mjpeg_url: str = "stream.mjpeg"
+    
     # Encoding
     hw_accel: str = "auto"
     

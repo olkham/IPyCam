@@ -56,6 +56,8 @@ h2 {
 .preview-toolbar {
     display: flex;
     justify-content: flex-start;
+    align-items: center;
+    gap: 15px;
     margin-top: 10px;
 }
 
@@ -78,7 +80,7 @@ h2 {
     transition: all 0.2s;
 }
 
-.btn-stream:hover {
+.btn-stream:hover:not(.disabled) {
     background: rgba(0, 212, 255, 0.2);
     color: #fff;
 }
@@ -86,6 +88,36 @@ h2 {
 .btn-stream.active {
     background: #00d4ff;
     color: #000;
+}
+
+.btn-stream.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.btn-stream.disabled:hover {
+    background: transparent;
+    color: #888;
+}
+
+/* Stream Mode Indicator */
+.stream-mode-indicator {
+    font-size: 10px;
+    font-weight: bold;
+    padding: 4px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.stream-mode-indicator.mode-go2rtc {
+    background: rgba(0, 212, 255, 0.2);
+    color: #00d4ff;
+}
+
+.stream-mode-indicator.mode-mjpeg {
+    background: rgba(255, 170, 0, 0.2);
+    color: #ffaa00;
 }
 
 /* PTZ Controls */
@@ -368,6 +400,17 @@ select:focus {
 
 .url-list span {
     color: #888;
+}
+
+.url-list a {
+    color: #00d4ff;
+    text-decoration: none;
+    word-break: break-all;
+}
+
+.url-list a:hover {
+    text-decoration: underline;
+    color: #5ae4ff;
 }
 
 /* Status Indicator */

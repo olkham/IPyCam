@@ -38,6 +38,7 @@ from .onvif import ONVIFService
 from .http import IPCameraHTTPHandler
 from .discovery import WSDiscoveryServer
 from .ptz import PTZController
+from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
 
 
 class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -56,6 +57,8 @@ class IPCamera:
     def __init__(self, config: Optional[CameraConfig] = None):
         self.config = config or CameraConfig()
         self.streamer: Optional[VideoStreamer] = None
+        self.mjpeg_streamer: Optional[MJPEGStreamer] = None
+        self._use_mjpeg_fallback = False
         
         # Initialize PTZ controller
         self.ptz = PTZController(
@@ -99,20 +102,36 @@ class IPCamera:
         print(f"  ONVIF Service: {self.config.onvif_url}")
         print(f"  Web UI: http://{self.config.local_ip}:{self.config.onvif_port}/")
         
-        # Start video streamer
-        stream_config = self.config.to_stream_config()
-        self.streamer = VideoStreamer(stream_config)
+        # Always start the MJPEG streamer (available as alternative view even with go2rtc)
+        self.mjpeg_streamer = MJPEGStreamer(quality=80)
+        self.mjpeg_streamer.start()
+        mjpeg_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/{self.config.mjpeg_url}"
         
-        # Use RTSP push to avoid go2rtc FLV/rtmp panic issues
-        if not self.streamer.start(self.config.main_stream_push_url, self.config.sub_stream_push_url):
-            print("  ✗ Failed to start video streamer")
-            print("    Check that go2rtc is running and configured correctly")
-            print("    run using: go2rtc --config ipycam/go2rtc.yaml")
-            return False
+        # Check if go2rtc is running
+        go2rtc_available = check_go2rtc_running(port=self.config.go2rtc_api_port)
+        rtsp_available = check_rtsp_port_available(port=self.config.rtsp_port)
         
-        print(f"  Main Stream: {self.config.main_stream_rtsp}")
-        print(f"  Sub Stream: {self.config.sub_stream_rtsp}")
-        print(f"  WebRTC: {self.config.webrtc_url}")
+        if go2rtc_available and rtsp_available:
+            # Use go2rtc for streaming
+            self._use_mjpeg_fallback = False
+            stream_config = self.config.to_stream_config()
+            self.streamer = VideoStreamer(stream_config)
+            
+            if not self.streamer.start(self.config.main_stream_push_url, self.config.sub_stream_push_url):
+                print("  ⚠ Failed to start video streamer, falling back to MJPEG")
+                self._use_mjpeg_fallback = True
+            else:
+                print(f"  Main Stream: {self.config.main_stream_rtsp}")
+                print(f"  Sub Stream: {self.config.sub_stream_rtsp}")
+                print(f"  WebRTC: {self.config.webrtc_url}")
+                print(f"  MJPEG Stream: {mjpeg_url}")
+        else:
+            # Fallback to native MJPEG streaming only
+            self._use_mjpeg_fallback = True
+            print("  ⚠ go2rtc not detected - using native MJPEG fallback")
+            print(f"  MJPEG Stream: {mjpeg_url}")
+            print("  Note: RTSP/WebRTC unavailable. Start go2rtc for full functionality:")
+            print("    go2rtc --config ipycam/go2rtc.yaml")
         
         self._running = True
         return True
@@ -126,6 +145,9 @@ class IPCamera:
         
         if self.streamer:
             self.streamer.stop()
+        
+        if self.mjpeg_streamer:
+            self.mjpeg_streamer.stop()
         
         if self._discovery:
             self._discovery.stop()
@@ -148,9 +170,13 @@ class IPCamera:
         
         self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted + timestamp)
         
-        # Send frame to streamer
-        result = False
-        if self.streamer:
+        # Always send to MJPEG streamer (for web UI MJPEG view)
+        if self.mjpeg_streamer:
+            self.mjpeg_streamer.stream_frame(frame)
+        
+        # Send to go2rtc streamer if available (not in fallback mode)
+        result = True
+        if not self._use_mjpeg_fallback and self.streamer:
             result = self.streamer.stream(frame)
         
         # Frame pacing - maintain target FPS
@@ -244,7 +270,14 @@ class IPCamera:
         # During restart, streamer is temporarily None - don't exit the loop
         if self._restarting:
             return self._running
+        if self._use_mjpeg_fallback:
+            return self._running and self.mjpeg_streamer is not None and self.mjpeg_streamer.is_running
         return self._running and self.streamer is not None and self.streamer.is_running
+    
+    @property
+    def using_mjpeg_fallback(self) -> bool:
+        """Check if the camera is using the native MJPEG fallback"""
+        return self._use_mjpeg_fallback
     
     @property
     def stats(self) -> Optional[StreamStats]:
@@ -287,6 +320,9 @@ class IPCamera:
         source_type_label = source_labels.get(self.config.source_type, 'Unknown Source')
         source_info = self.config.source_info or 'Not specified'
         
+        # MJPEG URL
+        mjpeg_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/{self.config.mjpeg_url}"
+        
         replacements = {
             '{{camera_name}}': self.config.name,
             '{{preview_url}}': preview_url,
@@ -294,6 +330,7 @@ class IPCamera:
             '{{sub_rtsp}}': self.config.sub_stream_rtsp,
             '{{onvif_url}}': self.config.onvif_url,
             '{{webrtc_url}}': self.config.webrtc_url,
+            '{{mjpeg_url}}': mjpeg_url,
             '{{main_stream_name}}': self.config.main_stream_name,
             '{{sub_stream_name}}': self.config.sub_stream_name,
             '{{source_icon}}': source_icon,
