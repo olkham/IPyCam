@@ -90,6 +90,10 @@ def demo_ptz_sequence(camera):
 def main():
     # Create camera
     config = CameraConfig.load("camera_config.json")
+    # Set source info for the UI
+    config.source_type = "camera"
+    config.source_info = "Camera Index 0 (PTZ Demo)"
+    
     # Create camera with default settings
     camera = IPCamera(config=config)
     

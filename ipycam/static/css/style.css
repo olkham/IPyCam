@@ -308,6 +308,51 @@ select:focus {
     background: #e94560;
 }
 
+/* Source Info Box */
+.source-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: linear-gradient(135deg, #0f3460 0%, #1a1a4e 100%);
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #00d4ff;
+    margin-bottom: 20px;
+}
+
+.source-icon {
+    font-size: 32px;
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 212, 255, 0.1);
+    border-radius: 8px;
+}
+
+.source-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.source-type {
+    font-size: 0.75em;
+    color: #00d4ff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+
+.source-name {
+    font-size: 1.1em;
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* URL List */
 .url-list {
     background: #0f3460;

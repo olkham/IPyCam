@@ -38,6 +38,8 @@ def main():
         main_width=1280,
         main_height=720,
         main_fps=30,
+        source_type="generated",
+        source_info="Animated Gradient",
     )
     
     camera = IPCamera(config)

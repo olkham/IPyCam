@@ -263,6 +263,29 @@ class IPCamera:
         # Replace template variables
         preview_url = f"http://{self.config.local_ip}:{self.config.go2rtc_api_port}/stream.html?src={self.config.main_stream_name}"
         
+        # Determine source icon and label based on source_type
+        source_icons = {
+            'camera': '📷',
+            'video_file': '🎬',
+            'generated': '🔄',
+            'rtsp': '📡',
+            'screen': '🖥️',
+            'custom': '⚙️',
+            'unknown': '❓',
+        }
+        source_labels = {
+            'camera': 'Camera',
+            'video_file': 'Video File',
+            'generated': 'Generated',
+            'rtsp': 'RTSP Stream',
+            'screen': 'Screen Capture',
+            'custom': 'Custom Source',
+            'unknown': 'Unknown Source',
+        }
+        source_icon = source_icons.get(self.config.source_type, '❓')
+        source_type_label = source_labels.get(self.config.source_type, 'Unknown Source')
+        source_info = self.config.source_info or 'Not specified'
+        
         replacements = {
             '{{camera_name}}': self.config.name,
             '{{preview_url}}': preview_url,
@@ -272,6 +295,9 @@ class IPCamera:
             '{{webrtc_url}}': self.config.webrtc_url,
             '{{main_stream_name}}': self.config.main_stream_name,
             '{{sub_stream_name}}': self.config.sub_stream_name,
+            '{{source_icon}}': source_icon,
+            '{{source_type_label}}': source_type_label,
+            '{{source_info}}': source_info,
         }
         
         for key, value in replacements.items():

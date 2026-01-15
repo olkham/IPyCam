@@ -9,6 +9,7 @@ Useful for testing without a physical camera.
 import time
 import cv2
 import sys
+import os
 from ipycam import IPCamera, CameraConfig
 
 
@@ -20,8 +21,12 @@ def main():
     
     video_path = sys.argv[1]
     
-    # Create camera
-    config = CameraConfig(name="Video File Camera")
+    # Create camera with source info
+    config = CameraConfig(
+        name="Video File Camera",
+        source_type="video_file",
+        source_info=os.path.basename(video_path)
+    )
     camera = IPCamera(config)
     
     if not camera.start():

@@ -162,6 +162,9 @@ def main():
     """Demo: Hardware PTZ (digital PTZ disabled)"""
     
     config = CameraConfig.load("camera_config.json")
+    config.source_type = "camera"
+    config.source_info = "Camera Index 0 (Hardware PTZ)"
+    
     camera = IPCamera(config=config)
     
     # Disable digital PTZ when using hardware controllers

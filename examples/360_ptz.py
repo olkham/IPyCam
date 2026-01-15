@@ -30,6 +30,8 @@ def main():
     
     # Load configuration
     config = CameraConfig.load("camera_config.json")
+    config.source_type = "camera"
+    config.source_info = "360° Camera (Webcam Index 1)"
     
     # Create IPyCam instance
     ipycamera = IPCamera(config=config)

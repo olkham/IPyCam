@@ -14,8 +14,45 @@ Examples:
 """
 
 import argparse
+import os
 import cv2
 from . import IPCamera, CameraConfig
+
+
+def infer_source_type(source_arg: str) -> tuple[str, str]:
+    """
+    Infer source_type and source_info from the camera argument.
+    
+    Returns:
+        tuple of (source_type, source_info)
+    """
+    # Try to parse as integer (webcam index)
+    try:
+        index = int(source_arg)
+        return ("camera", f"Camera Index {index}")
+    except ValueError:
+        pass
+    
+    # Check if it's a URL
+    source_lower = source_arg.lower()
+    if source_lower.startswith(('rtsp://', 'rtmp://', 'http://', 'https://')):
+        return ("rtsp", source_arg)
+    
+    # Check if it's a file
+    if os.path.isfile(source_arg):
+        filename = os.path.basename(source_arg)
+        return ("video_file", filename)
+    
+    # Could be a file path that doesn't exist yet, or other source
+    # Check by extension
+    _, ext = os.path.splitext(source_arg)
+    video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpeg', '.mpg', '.3gp'}
+    if ext.lower() in video_extensions:
+        filename = os.path.basename(source_arg)
+        return ("video_file", filename)
+    
+    # Default to custom if we can't determine
+    return ("custom", source_arg)
 
 
 def main():
@@ -96,6 +133,11 @@ Examples:
         config.show_timestamp = False
     if args.timestamp_position:
         config.timestamp_position = args.timestamp_position
+    
+    # Infer and set source type from camera argument
+    source_type, source_info = infer_source_type(args.camera)
+    config.source_type = source_type
+    config.source_info = source_info
     
     print(f"Loaded config: {config.name} ({config.main_width}x{config.main_height}@{config.main_fps}fps)")
     

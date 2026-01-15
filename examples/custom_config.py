@@ -18,6 +18,10 @@ def main():
         model="CustomCam-Pro",
         serial_number="CC-12345",
         
+        # Source info for UI display
+        source_type="camera",
+        source_info="Camera Index 0",
+        
         # Stream settings
         main_width=1280,
         main_height=720,

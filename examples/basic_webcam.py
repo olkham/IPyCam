@@ -13,6 +13,10 @@ from ipycam import IPCamera, CameraConfig
 def main():
     
     config = CameraConfig.load("camera_config.json")
+    # Set source info for the UI
+    config.source_type = "camera"
+    config.source_info = "Camera Index 0"
+    
     # Create camera with default settings
     camera = IPCamera(config=config)
     

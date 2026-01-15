@@ -64,6 +64,10 @@ class CameraConfig:
     timestamp_format: str = "%Y-%m-%d %H:%M:%S"
     timestamp_position: str = "bottom-left"  # top-left, top-right, bottom-left, bottom-right
     
+    # Source info (for UI display)
+    source_type: str = "unknown"  # camera, video_file, generated, rtsp, custom
+    source_info: str = ""  # e.g., "Camera 0", "video.mp4", "rtsp://..."
+    
     def __post_init__(self):
         if not self.local_ip:
             self.local_ip = get_local_ip()
