@@ -354,9 +354,29 @@ function updateStats() {
     fetch('/api/stats')
         .then(r => r.json())
         .then(data => {
-            document.getElementById('fps').textContent = data.actual_fps || '-';
-            document.getElementById('frames').textContent = data.frames_sent || '-';
-            document.getElementById('uptime').textContent = data.elapsed_time ? Math.floor(data.elapsed_time) + 's' : '-';
+            // Show stats based on what the user is currently viewing
+            let fps, frames, uptime;
+            
+            if (currentStreamType === 'mjpeg') {
+                // Viewing MJPEG - show MJPEG stats
+                fps = data.mjpeg_fps ?? data.actual_fps ?? '-';
+                frames = data.mjpeg_frames_sent ?? data.frames_sent ?? '-';
+                uptime = data.mjpeg_elapsed_time ?? data.elapsed_time;
+            } else if (currentStreamType === 'native_rtc') {
+                // Viewing native WebRTC - show WebRTC stats
+                fps = data.webrtc_fps ?? data.actual_fps ?? '-';
+                frames = data.webrtc_frames_sent ?? data.frames_sent ?? '-';
+                uptime = data.webrtc_elapsed_time ?? data.elapsed_time;
+            } else {
+                // Viewing go2rtc - show primary stats
+                fps = data.actual_fps ?? '-';
+                frames = data.frames_sent ?? '-';
+                uptime = data.elapsed_time;
+            }
+            
+            document.getElementById('fps').textContent = fps;
+            document.getElementById('frames').textContent = frames;
+            document.getElementById('uptime').textContent = uptime ? Math.floor(uptime) + 's' : '-';
             document.getElementById('dropped').textContent = data.dropped_frames || '0';
             document.getElementById('status').className = 'status ' + (data.is_streaming ? 'online' : 'offline');
             

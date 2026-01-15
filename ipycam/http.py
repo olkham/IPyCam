@@ -194,48 +194,52 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
     
     def serve_stats(self):
         """Serve streaming stats as JSON"""
-        stats = {}
         streaming_mode = self.camera.streaming_mode
+        mjpeg = self.camera.mjpeg_streamer
         
+        # Base stats that are always available
+        stats = {
+            'streaming_mode': streaming_mode,
+            'is_streaming': True,
+            # MJPEG stats (always available since MJPEG is always running)
+            'mjpeg_frames_sent': mjpeg.frames_sent if mjpeg else 0,
+            'mjpeg_fps': round(mjpeg.actual_fps, 1) if mjpeg else 0,
+            'mjpeg_elapsed_time': round(mjpeg.elapsed_time, 1) if mjpeg else 0,
+            'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
+        }
+        
+        # Add mode-specific stats
         if streaming_mode == 'native_webrtc' and self.camera.webrtc_streamer:
-            # Native WebRTC mode stats
             ws = self.camera.webrtc_streamer.stats
-            mjpeg = self.camera.mjpeg_streamer
-            stats = {
-                'frames_sent': ws.frames_sent,
-                'actual_fps': round(ws.actual_fps, 1),
-                'elapsed_time': round(ws.elapsed_time, 1),
-                'dropped_frames': 0,
-                'is_streaming': self.camera.webrtc_streamer.is_running,
-                'streaming_mode': 'native_webrtc',
+            stats.update({
+                'webrtc_frames_sent': ws.frames_sent,
+                'webrtc_fps': round(ws.actual_fps, 1),
+                'webrtc_elapsed_time': round(ws.elapsed_time, 1),
                 'webrtc_connections': self.camera.webrtc_streamer.connection_count,
-                'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
-            }
+                'is_streaming': self.camera.webrtc_streamer.is_running,
+                # Primary stats for UI (use WebRTC when connections exist, else MJPEG)
+                'frames_sent': ws.frames_sent if self.camera.webrtc_streamer.connection_count > 0 else (mjpeg.frames_sent if mjpeg else 0),
+                'actual_fps': round(ws.actual_fps, 1) if self.camera.webrtc_streamer.connection_count > 0 else (round(mjpeg.actual_fps, 1) if mjpeg else 0),
+                'elapsed_time': round(ws.elapsed_time, 1) if self.camera.webrtc_streamer.connection_count > 0 else (round(mjpeg.elapsed_time, 1) if mjpeg else 0),
+                'dropped_frames': 0,
+            })
         elif streaming_mode == 'mjpeg' or self.camera.using_mjpeg_fallback:
-            # MJPEG-only mode stats
-            mjpeg = self.camera.mjpeg_streamer
-            stats = {
+            stats.update({
                 'frames_sent': mjpeg.frames_sent if mjpeg else 0,
                 'actual_fps': round(mjpeg.actual_fps, 1) if mjpeg else 0,
                 'elapsed_time': round(mjpeg.elapsed_time, 1) if mjpeg else 0,
                 'dropped_frames': 0,
                 'is_streaming': mjpeg.is_running if mjpeg else False,
-                'streaming_mode': 'mjpeg',
-                'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
-            }
+            })
         elif self.camera.streamer:
-            # go2rtc mode stats
             s = self.camera.streamer.stats
-            mjpeg = self.camera.mjpeg_streamer
-            stats = {
+            stats.update({
                 'frames_sent': s.frames_sent,
                 'actual_fps': round(s.actual_fps, 1),
                 'elapsed_time': round(s.elapsed_time, 1),
                 'dropped_frames': s.dropped_frames,
                 'is_streaming': self.camera.streamer.is_running,
-                'streaming_mode': 'go2rtc',
-                'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
-            }
+            })
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
