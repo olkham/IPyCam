@@ -5,9 +5,11 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 ## Features
 
 - **ONVIF Compliance**: Full WS-Discovery support for automatic camera detection
-- **RTSP Streaming**: High-performance video streaming via go2rtc
+- **RTSP Streaming**: High-performance video streaming via go2rtc (optional) or native Python fallback
+- **WebRTC Support**: Direct browser streaming with native Python implementation
 - **PTZ Controls**: Digital Pan-Tilt-Zoom with preset positions
-- **Hardware Acceleration**: Automatic detection and use of NVENC, QSV, or CPU encoding
+- **Hardware Acceleration**: Automatic detection and use of NVENC, QSV, or CPU encoding (with go2rtc)
+- **Native Fallback**: Pure Python streaming (WebRTC, MJPEG) when go2rtc is not available
 - **Web Interface**: Built-in configuration and live preview
 - **Low Latency**: Optimized async frame pipeline for real-time streaming
 - **Flexible Input**: Accept frames from any source (webcam, video file, generated content)
@@ -15,19 +17,12 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 ## Requirements
 
 - Python 3.8+
-- FFmpeg (with hardware encoding support recommended)
-- go2rtc (not included)
+- **Optional**: FFmpeg + go2rtc for hardware-accelerated encoding (recommended for high performance)
+- **Optional**: aiortc (`pip install aiortc`) for native WebRTC streaming fallback
+
+> **Note**: IPyCam can run without go2rtc using pure Python streaming. However, go2rtc + FFmpeg provides significantly better performance, especially for high-resolution streams.
 
 ## Quick Start
-
-### Prerequisites
-
-1. **Install go2rtc**: Download the latest release from [go2rtc releases](https://github.com/AlexxIT/go2rtc/releases)
-2. **Start go2rtc** with the IPyCam configuration:
-   ```bash
-   go2rtc.exe --config ipycam\go2rtc.yaml
-   ```
-   Keep this running in a separate terminal.
 
 ### Installation
 
@@ -42,6 +37,19 @@ git clone https://github.com/olkham/IPyCam.git
 cd ipycam
 pip install -e .
 ```
+
+**Optional: Enhanced Streaming Performance (Recommended)**
+
+For hardware-accelerated encoding with go2rtc:
+
+1. **Install go2rtc**: Download from [go2rtc releases](https://github.com/AlexxIT/go2rtc/releases)
+2. **Start go2rtc** with IPyCam configuration:
+   ```bash
+   go2rtc.exe --config ipycam\go2rtc.yaml
+   ```
+   Keep this running in a separate terminal.
+
+Without go2rtc, IPyCam will automatically fall back to native Python streaming.
 
 **Optional: 360° Camera Support**
 
@@ -125,15 +133,23 @@ Configuration is stored in `camera_config.json`:
   "main_bitrate": "4M",
   "sub_width": 640,
   "sub_height": 360,
+  "native_width": 640,
+  "native_height": 480,
+  "native_fps": 15,
+  "native_bitrate": "500K",
   "hw_accel": "auto"
 }
 ```
 
-Hardware acceleration options:
+Hardware acceleration options (go2rtc only):
 - `"auto"` - Try NVENC → QSV → CPU (default)
 - `"nvenc"` - NVIDIA GPU encoding
 - `"qsv"` - Intel Quick Sync Video
 - `"cpu"` - Software encoding (libx264)
+
+Native fallback settings:
+- `native_width/height/fps/bitrate` - Used when go2rtc is not available
+- Lower resolution recommended for software encoding performance
 
 ## PTZ Controls
 
@@ -174,13 +190,13 @@ ipycam/
 ## Troubleshooting
 
 ### Camera freezes after a few frames
-- Check FFmpeg is installed and in PATH
-- Verify go2rtc.exe is running
-- Check hardware encoder availability
+- **With go2rtc**: Check FFmpeg is installed and in PATH, verify go2rtc.exe is running
+- **Native mode**: Install PyAV (`pip install av`) for RTSP or aiortc for WebRTC
+- Check hardware encoder availability (go2rtc only)
 
 ### Low FPS performance
-- Enable hardware acceleration in config
-- Reduce resolution or bitrate
+- **Recommended**: Use go2rtc with hardware acceleration
+- **Native mode**: Reduce `native_width`, `native_height`, and `native_fps` in config
 - Check CPU/GPU usage
 - Ensure webcam supports requested FPS
 
