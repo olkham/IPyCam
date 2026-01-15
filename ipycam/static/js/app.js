@@ -266,10 +266,10 @@ function checkStreamAvailability() {
                     enableStreamButtons(['native_rtc']);
                 }
             } else if (streamingMode === 'native_webrtc') {
-                // Native WebRTC mode - disable go2rtc buttons
+                // Native WebRTC mode - disable go2rtc buttons, default to MJPEG (faster start)
                 disableStreamButtons(['rtc'], 'go2rtc WebRTC unavailable');
                 enableStreamButtons(['native_rtc', 'mjpeg']);
-                switchStream('main', 'native_rtc');
+                switchStream('mjpeg', 'mjpeg');
             } else {
                 // MJPEG-only mode
                 disableStreamButtons(['rtc'], 'WebRTC unavailable - go2rtc not running');
@@ -318,17 +318,24 @@ function updateStreamModeIndicator() {
     
     // Show what the user is currently viewing
     if (currentStreamType === 'mjpeg' || currentStream === 'mjpeg') {
-        indicator.textContent = 'MJPEG';
-        indicator.className = 'stream-mode-indicator mode-mjpeg';
-        indicator.title = `Viewing MJPEG stream (Server mode: ${streamingMode})`;
+        // Differentiate between go2rtc MJPEG and native Python MJPEG
+        if (streamingMode === 'go2rtc') {
+            indicator.textContent = 'go2rtc MJPEG';
+            indicator.className = 'stream-mode-indicator mode-go2rtc';
+            indicator.title = 'Viewing go2rtc MJPEG stream';
+        } else {
+            indicator.textContent = 'Python Native MJPEG';
+            indicator.className = 'stream-mode-indicator mode-mjpeg';
+            indicator.title = 'Viewing Python native MJPEG stream';
+        }
     } else if (currentStreamType === 'native_rtc') {
-        indicator.textContent = 'Native WebRTC';
+        indicator.textContent = 'Python Native WebRTC';
         indicator.className = 'stream-mode-indicator mode-native-webrtc';
-        indicator.title = `Viewing Native WebRTC stream (Server mode: ${streamingMode})`;
+        indicator.title = 'Viewing Python native WebRTC stream (aiortc)';
     } else if (currentStreamType === 'rtc') {
         indicator.textContent = 'go2rtc WebRTC';
         indicator.className = 'stream-mode-indicator mode-go2rtc';
-        indicator.title = `Viewing go2rtc WebRTC stream (Server mode: ${streamingMode})`;
+        indicator.title = 'Viewing go2rtc WebRTC stream';
     } else {
         // Default based on server mode
         if (streamingMode === 'go2rtc') {
@@ -336,13 +343,13 @@ function updateStreamModeIndicator() {
             indicator.className = 'stream-mode-indicator mode-go2rtc';
             indicator.title = 'Full streaming available (RTSP/WebRTC/MJPEG)';
         } else if (streamingMode === 'native_webrtc') {
-            indicator.textContent = 'Native WebRTC';
+            indicator.textContent = 'Python Native WebRTC';
             indicator.className = 'stream-mode-indicator mode-native-webrtc';
-            indicator.title = 'Native WebRTC mode - RTSP unavailable';
+            indicator.title = 'Python native WebRTC mode - RTSP unavailable';
         } else {
-            indicator.textContent = 'MJPEG Only';
+            indicator.textContent = 'Python Native MJPEG';
             indicator.className = 'stream-mode-indicator mode-mjpeg';
-            indicator.title = 'MJPEG only - go2rtc/aiortc not available';
+            indicator.title = 'Python native MJPEG only - go2rtc/aiortc not available';
         }
     }
 }
