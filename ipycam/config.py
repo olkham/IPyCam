@@ -56,6 +56,12 @@ class CameraConfig:
     sub_bitrate: str = "1M"
     sub_stream_name: str = "video_sub"
     
+    # Native fallback stream (software encoding - lower resolution for performance)
+    native_width: int = 640
+    native_height: int = 480
+    native_fps: int = 15
+    native_bitrate: str = "500K"
+    
     #mjpeg fallback
     mjpeg_url: str = "stream.mjpeg"
     

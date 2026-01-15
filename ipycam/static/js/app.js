@@ -265,8 +265,8 @@ function checkStreamAvailability() {
                 if (nativeWebRTCAvailable) {
                     enableStreamButtons(['native_rtc']);
                 }
-            } else if (streamingMode === 'native_webrtc') {
-                // Native WebRTC mode - disable go2rtc buttons, default to MJPEG (faster start)
+            } else if (streamingMode === 'native') {
+                // Native Python mode (RTSP + WebRTC available) - disable go2rtc buttons, default to MJPEG
                 disableStreamButtons(['rtc'], 'go2rtc WebRTC unavailable');
                 enableStreamButtons(['native_rtc', 'mjpeg']);
                 switchStream('mjpeg', 'mjpeg');
@@ -342,14 +342,14 @@ function updateStreamModeIndicator() {
             indicator.textContent = 'go2rtc';
             indicator.className = 'stream-mode-indicator mode-go2rtc';
             indicator.title = 'Full streaming available (RTSP/WebRTC/MJPEG)';
-        } else if (streamingMode === 'native_webrtc') {
-            indicator.textContent = 'Python Native WebRTC';
+        } else if (streamingMode === 'native') {
+            indicator.textContent = 'Python Native';
             indicator.className = 'stream-mode-indicator mode-native-webrtc';
-            indicator.title = 'Python native WebRTC mode - RTSP unavailable';
+            indicator.title = 'Python native streaming (RTSP/WebRTC/MJPEG)';
         } else {
             indicator.textContent = 'Python Native MJPEG';
             indicator.className = 'stream-mode-indicator mode-mjpeg';
-            indicator.title = 'Python native MJPEG only - go2rtc/aiortc not available';
+            indicator.title = 'Python native MJPEG only - install av/aiortc for more';
         }
     }
 }

@@ -40,6 +40,7 @@ from .discovery import WSDiscoveryServer
 from .ptz import PTZController
 from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
 from .webrtc import NativeWebRTCStreamer, is_webrtc_available
+from .rtsp import NativeRTSPServer, is_rtsp_server_available
 
 
 class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -60,8 +61,9 @@ class IPCamera:
         self.streamer: Optional[VideoStreamer] = None
         self.mjpeg_streamer: Optional[MJPEGStreamer] = None
         self.webrtc_streamer: Optional[NativeWebRTCStreamer] = None
+        self.rtsp_streamer: Optional[NativeRTSPServer] = None
         self._use_mjpeg_fallback = False
-        self._streaming_mode = 'go2rtc'  # 'go2rtc', 'native_webrtc', or 'mjpeg'
+        self._streaming_mode = 'go2rtc'  # 'go2rtc', 'native', or 'mjpeg'
         
         # Initialize PTZ controller
         self.ptz = PTZController(
@@ -122,52 +124,81 @@ class IPCamera:
             self.streamer = VideoStreamer(stream_config)
             
             if not self.streamer.start(self.config.main_stream_push_url, self.config.sub_stream_push_url):
-                print("  ⚠ Failed to start video streamer, trying native WebRTC fallback...")
-                self._try_native_webrtc_fallback(mjpeg_url)
+                print("  ⚠ Failed to start video streamer, trying native fallback...")
+                self._try_native_fallback(mjpeg_url)
             else:
                 print(f"  Main Stream: {self.config.main_stream_rtsp}")
                 print(f"  Sub Stream: {self.config.sub_stream_rtsp}")
                 print(f"  WebRTC: {self.config.webrtc_url}")
                 print(f"  MJPEG Stream: {mjpeg_url}")
         else:
-            # go2rtc not available - try native WebRTC as fallback
-            self._try_native_webrtc_fallback(mjpeg_url)
+            # go2rtc not available - try native fallbacks
+            self._try_native_fallback(mjpeg_url)
         
         self._running = True
         return True
     
-    def _try_native_webrtc_fallback(self, mjpeg_url: str):
-        """Try to start native WebRTC, fall back to MJPEG-only if not available."""
+    def _try_native_fallback(self, mjpeg_url: str):
+        """Try to start native RTSP/WebRTC, fall back to MJPEG-only if not available."""
+        native_rtsp_started = False
+        native_webrtc_started = False
+        
+        # Try native RTSP server first
+        if is_rtsp_server_available():
+            try:
+                self.rtsp_streamer = NativeRTSPServer(
+                    port=self.config.rtsp_port,
+                    fps=self.config.native_fps,
+                    width=self.config.native_width,
+                    height=self.config.native_height,
+                    bitrate=self.config.native_bitrate,
+                    stream_name=self.config.main_stream_name
+                )
+                if self.rtsp_streamer.start():
+                    native_rtsp_started = True
+                else:
+                    self.rtsp_streamer = None
+            except Exception as e:
+                print(f"  ⚠ Failed to start native RTSP: {e}")
+                self.rtsp_streamer = None
+        
+        # Try native WebRTC
         if is_webrtc_available():
             try:
                 self.webrtc_streamer = NativeWebRTCStreamer(
-                    fps=self.config.main_fps,
-                    width=self.config.main_width,
-                    height=self.config.main_height
+                    fps=self.config.native_fps,
+                    width=self.config.native_width,
+                    height=self.config.native_height
                 )
                 if self.webrtc_streamer.start():
-                    self._use_mjpeg_fallback = False
-                    self._streaming_mode = 'native_webrtc'
-                    webrtc_native_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/api/webrtc/offer"
-                    print("  ⚠ go2rtc not detected - using native WebRTC fallback")
-                    print(f"  Native WebRTC: {webrtc_native_url}")
-                    print(f"  MJPEG Stream: {mjpeg_url}")
-                    print("  Note: RTSP unavailable. Start go2rtc for full functionality:")
-                    print("    go2rtc --config ipycam/go2rtc.yaml")
-                    return
+                    native_webrtc_started = True
                 else:
                     self.webrtc_streamer = None
             except Exception as e:
                 print(f"  ⚠ Failed to start native WebRTC: {e}")
                 self.webrtc_streamer = None
         
-        # Final fallback: MJPEG only
-        self._use_mjpeg_fallback = True
-        self._streaming_mode = 'mjpeg'
-        print("  ⚠ No WebRTC available - using MJPEG-only fallback")
-        print(f"  MJPEG Stream: {mjpeg_url}")
-        print("  Note: Install aiortc for native WebRTC: pip install aiortc")
-        print("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
+        # Set mode based on what started successfully
+        if native_rtsp_started or native_webrtc_started:
+            self._use_mjpeg_fallback = False
+            self._streaming_mode = 'native'
+            print("  ⚠ go2rtc not detected - using Python native streaming")
+            if native_rtsp_started:
+                print(f"  Native RTSP: {self.rtsp_streamer.rtsp_url}")
+            if native_webrtc_started:
+                webrtc_native_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/api/webrtc/offer"
+                print(f"  Native WebRTC: {webrtc_native_url}")
+            print(f"  MJPEG Stream: {mjpeg_url}")
+            print("  Note: Start go2rtc for better performance:")
+            print("    go2rtc --config ipycam/go2rtc.yaml")
+        else:
+            # Final fallback: MJPEG only
+            self._use_mjpeg_fallback = True
+            self._streaming_mode = 'mjpeg'
+            print("  ⚠ No native streaming available - using MJPEG-only fallback")
+            print(f"  MJPEG Stream: {mjpeg_url}")
+            print("  Note: Install av and aiortc for native streaming: pip install av aiortc")
+            print("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
     
     def stop(self):
         """Stop all camera services"""
@@ -178,6 +209,9 @@ class IPCamera:
         
         if self.streamer:
             self.streamer.stop()
+        
+        if self.rtsp_streamer:
+            self.rtsp_streamer.stop()
         
         if self.webrtc_streamer:
             self.webrtc_streamer.stop()
@@ -213,6 +247,10 @@ class IPCamera:
         # Send to native WebRTC streamer only if there are active connections
         if self.webrtc_streamer and self.webrtc_streamer.connection_count > 0:
             self.webrtc_streamer.stream_frame(frame)
+        
+        # Send to native RTSP streamer only if there are active clients
+        if self.rtsp_streamer and self.rtsp_streamer.client_count > 0:
+            self.rtsp_streamer.stream_frame(frame)
         
         # Send to go2rtc streamer if available (not in fallback mode)
         result = True

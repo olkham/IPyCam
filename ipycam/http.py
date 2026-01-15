@@ -186,6 +186,12 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         # Native WebRTC URL (signaling endpoint)
         config_dict['webrtc_native_url'] = f"http://{self.camera.config.local_ip}:{self.camera.config.onvif_port}/api/webrtc/offer"
         config_dict['webrtc_native_available'] = self.camera.webrtc_streamer is not None
+        # Native RTSP URL
+        if self.camera.rtsp_streamer:
+            config_dict['rtsp_native_url'] = self.camera.rtsp_streamer.rtsp_url
+            config_dict['rtsp_native_available'] = True
+        else:
+            config_dict['rtsp_native_available'] = False
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -196,6 +202,8 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         """Serve streaming stats as JSON"""
         streaming_mode = self.camera.streaming_mode
         mjpeg = self.camera.mjpeg_streamer
+        rtsp = self.camera.rtsp_streamer
+        webrtc = self.camera.webrtc_streamer
         
         # Base stats that are always available
         stats = {
@@ -208,21 +216,49 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
         }
         
-        # Add mode-specific stats
-        if streaming_mode == 'native_webrtc' and self.camera.webrtc_streamer:
-            ws = self.camera.webrtc_streamer.stats
+        # Add native RTSP stats if available
+        if rtsp:
             stats.update({
-                'webrtc_frames_sent': ws.frames_sent,
-                'webrtc_fps': round(ws.actual_fps, 1),
-                'webrtc_elapsed_time': round(ws.elapsed_time, 1),
-                'webrtc_connections': self.camera.webrtc_streamer.connection_count,
-                'is_streaming': self.camera.webrtc_streamer.is_running,
-                # Primary stats for UI (use WebRTC when connections exist, else MJPEG)
-                'frames_sent': ws.frames_sent if self.camera.webrtc_streamer.connection_count > 0 else (mjpeg.frames_sent if mjpeg else 0),
-                'actual_fps': round(ws.actual_fps, 1) if self.camera.webrtc_streamer.connection_count > 0 else (round(mjpeg.actual_fps, 1) if mjpeg else 0),
-                'elapsed_time': round(ws.elapsed_time, 1) if self.camera.webrtc_streamer.connection_count > 0 else (round(mjpeg.elapsed_time, 1) if mjpeg else 0),
-                'dropped_frames': 0,
+                'rtsp_frames_sent': rtsp.stats.frames_sent,
+                'rtsp_fps': round(rtsp.stats.actual_fps, 1),
+                'rtsp_elapsed_time': round(rtsp.stats.elapsed_time, 1),
+                'rtsp_clients': rtsp.client_count,
+                'rtsp_url': rtsp.rtsp_url,
             })
+        
+        # Add native WebRTC stats if available
+        if webrtc:
+            stats.update({
+                'webrtc_frames_sent': webrtc.stats.frames_sent,
+                'webrtc_fps': round(webrtc.stats.actual_fps, 1),
+                'webrtc_elapsed_time': round(webrtc.stats.elapsed_time, 1),
+                'webrtc_connections': webrtc.connection_count,
+            })
+        
+        # Add mode-specific primary stats for UI
+        if streaming_mode == 'native':
+            # Native mode - use RTSP stats if clients, else WebRTC if connections, else MJPEG
+            if rtsp and rtsp.client_count > 0:
+                stats.update({
+                    'frames_sent': rtsp.stats.frames_sent,
+                    'actual_fps': round(rtsp.stats.actual_fps, 1),
+                    'elapsed_time': round(rtsp.stats.elapsed_time, 1),
+                    'dropped_frames': 0,
+                })
+            elif webrtc and webrtc.connection_count > 0:
+                stats.update({
+                    'frames_sent': webrtc.stats.frames_sent,
+                    'actual_fps': round(webrtc.stats.actual_fps, 1),
+                    'elapsed_time': round(webrtc.stats.elapsed_time, 1),
+                    'dropped_frames': 0,
+                })
+            else:
+                stats.update({
+                    'frames_sent': mjpeg.frames_sent if mjpeg else 0,
+                    'actual_fps': round(mjpeg.actual_fps, 1) if mjpeg else 0,
+                    'elapsed_time': round(mjpeg.elapsed_time, 1) if mjpeg else 0,
+                    'dropped_frames': 0,
+                })
         elif streaming_mode == 'mjpeg' or self.camera.using_mjpeg_fallback:
             stats.update({
                 'frames_sent': mjpeg.frames_sent if mjpeg else 0,
