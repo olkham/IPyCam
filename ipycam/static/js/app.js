@@ -3,10 +3,12 @@
 /**
  * Stream state management
  */
-let currentStreamType = 'rtc';  // 'rtc' or 'mjpeg'
+let currentStreamType = 'rtc';  // 'rtc', 'native_rtc', or 'mjpeg'
 let currentStream = 'main';     // 'main', 'sub', or 'mjpeg'
-let streamingMode = 'go2rtc';   // 'go2rtc' or 'mjpeg' (server mode)
+let streamingMode = 'go2rtc';   // 'go2rtc', 'native_webrtc', or 'mjpeg' (server mode)
 let mjpegUrl = '';
+let nativeWebRTCAvailable = false;
+let nativePeerConnection = null;
 
 /**
  * PTZ Control Functions
@@ -93,16 +95,17 @@ function updatePtzStatus() {
 /**
  * Switch between stream types and sources
  * @param {string} stream - 'main', 'sub', or 'mjpeg'
- * @param {string} type - 'rtc' or 'mjpeg'
+ * @param {string} type - 'rtc', 'native_rtc', or 'mjpeg'
  */
 function switchStream(stream, type) {
-    // Block RTC streams if in MJPEG-only mode
-    if (type === 'rtc' && streamingMode === 'mjpeg') {
-        return;  // Don't switch - RTC not available
+    // Block go2rtc RTC streams if in MJPEG-only or native_webrtc mode
+    if (type === 'rtc' && streamingMode !== 'go2rtc') {
+        return;  // Don't switch - go2rtc not available
     }
     
     const iframe = document.getElementById('preview-iframe');
     const mjpegImg = document.getElementById('preview-mjpeg');
+    const nativeVideo = document.getElementById('preview-native-rtc');
     const mainStream = iframe.dataset.mainStream;
     const subStream = iframe.dataset.subStream;
     const apiUrl = iframe.dataset.apiUrl;
@@ -110,19 +113,35 @@ function switchStream(stream, type) {
     currentStream = stream;
     currentStreamType = type;
     
+    // Stop any existing native WebRTC connection
+    if (nativePeerConnection) {
+        nativePeerConnection.close();
+        nativePeerConnection = null;
+    }
+    
     if (type === 'mjpeg' || stream === 'mjpeg') {
         // Switch to MJPEG mode - always use native MJPEG endpoint
         iframe.style.display = 'none';
+        nativeVideo.style.display = 'none';
         mjpegImg.style.display = 'block';
         // Use full URL from mjpegUrl, or construct from current location
         const mjpegSrc = mjpegUrl || (window.location.origin + '/stream.mjpeg');
         mjpegImg.src = mjpegSrc;
         currentStreamType = 'mjpeg';
         currentStream = 'mjpeg';
-    } else {
-        // Switch to WebRTC mode
+    } else if (type === 'native_rtc') {
+        // Switch to native WebRTC mode
+        iframe.style.display = 'none';
         mjpegImg.style.display = 'none';
         mjpegImg.src = '';  // Stop MJPEG loading
+        nativeVideo.style.display = 'block';
+        startNativeWebRTC(nativeVideo);
+        currentStreamType = 'native_rtc';
+    } else {
+        // Switch to go2rtc WebRTC mode
+        mjpegImg.style.display = 'none';
+        mjpegImg.src = '';  // Stop MJPEG loading
+        nativeVideo.style.display = 'none';
         iframe.style.display = 'block';
         const streamName = stream === 'sub' ? subStream : mainStream;
         iframe.src = `${apiUrl}/stream.html?src=${streamName}`;
@@ -132,10 +151,84 @@ function switchStream(stream, type) {
     document.querySelectorAll('.btn-stream').forEach(btn => {
         const btnStream = btn.dataset.stream;
         const btnType = btn.dataset.type;
-        const isActive = (stream === 'mjpeg' && btnStream === 'mjpeg') ||
-                        (stream !== 'mjpeg' && btnStream === stream && btnType === type);
+        let isActive = false;
+        
+        if (type === 'mjpeg' || stream === 'mjpeg') {
+            isActive = btnStream === 'mjpeg';
+        } else if (type === 'native_rtc') {
+            isActive = btnType === 'native_rtc';
+        } else {
+            isActive = btnStream === stream && btnType === type;
+        }
+        
         btn.classList.toggle('active', isActive);
     });
+    
+    // Update stream mode indicator to show current view
+    updateStreamModeIndicator();
+}
+
+/**
+ * Start native WebRTC connection
+ */
+async function startNativeWebRTC(videoElement) {
+    try {
+        nativePeerConnection = new RTCPeerConnection({
+            sdpSemantics: 'unified-plan',
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        
+        // Handle incoming video track
+        nativePeerConnection.addEventListener('track', (evt) => {
+            if (evt.track.kind === 'video') {
+                videoElement.srcObject = evt.streams[0];
+            }
+        });
+        
+        // Add transceiver to receive video
+        nativePeerConnection.addTransceiver('video', { direction: 'recvonly' });
+        
+        // Create offer
+        const offer = await nativePeerConnection.createOffer();
+        await nativePeerConnection.setLocalDescription(offer);
+        
+        // Wait for ICE gathering
+        await new Promise((resolve) => {
+            if (nativePeerConnection.iceGatheringState === 'complete') {
+                resolve();
+            } else {
+                nativePeerConnection.addEventListener('icegatheringstatechange', () => {
+                    if (nativePeerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    }
+                });
+            }
+        });
+        
+        // Send offer to server
+        const response = await fetch('/api/webrtc/offer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sdp: nativePeerConnection.localDescription.sdp,
+                type: nativePeerConnection.localDescription.type
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to connect');
+        }
+        
+        const answer = await response.json();
+        await nativePeerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        
+    } catch (err) {
+        console.error('Native WebRTC error:', err);
+        // Fall back to MJPEG on error
+        if (nativeWebRTCAvailable) {
+            switchStream('mjpeg', 'mjpeg');
+        }
+    }
 }
 
 /**
@@ -146,6 +239,7 @@ function checkStreamAvailability() {
         .then(r => r.json())
         .then(config => {
             streamingMode = config.streaming_mode || 'go2rtc';
+            nativeWebRTCAvailable = config.webrtc_native_available || false;
             
             // Use full MJPEG URL from config, or construct from current location
             if (config.mjpeg_url && config.mjpeg_url.startsWith('http')) {
@@ -164,35 +258,92 @@ function checkStreamAvailability() {
             // Update mode indicator
             updateStreamModeIndicator();
             
-            // If server is in MJPEG-only mode, switch to MJPEG and disable RTC buttons
-            if (streamingMode === 'mjpeg') {
+            // Configure UI based on streaming mode
+            if (streamingMode === 'go2rtc') {
+                // Full functionality available
+                enableStreamButtons(['rtc', 'mjpeg']);
+                if (nativeWebRTCAvailable) {
+                    enableStreamButtons(['native_rtc']);
+                }
+            } else if (streamingMode === 'native_webrtc') {
+                // Native WebRTC mode - disable go2rtc buttons
+                disableStreamButtons(['rtc'], 'go2rtc WebRTC unavailable');
+                enableStreamButtons(['native_rtc', 'mjpeg']);
+                switchStream('main', 'native_rtc');
+            } else {
+                // MJPEG-only mode
+                disableStreamButtons(['rtc'], 'WebRTC unavailable - go2rtc not running');
+                if (nativeWebRTCAvailable) {
+                    enableStreamButtons(['native_rtc', 'mjpeg']);
+                } else {
+                    disableStreamButtons(['native_rtc'], 'Install aiortc for native WebRTC');
+                }
                 switchStream('mjpeg', 'mjpeg');
-                
-                // Disable RTC buttons visually
-                document.querySelectorAll('.btn-stream[data-type="rtc"]').forEach(btn => {
-                    btn.classList.add('disabled');
-                    btn.title = 'WebRTC unavailable - go2rtc not running';
-                });
             }
         })
         .catch(err => console.error('Failed to check stream availability:', err));
 }
 
 /**
+ * Enable stream buttons by type
+ */
+function enableStreamButtons(types) {
+    types.forEach(type => {
+        document.querySelectorAll(`.btn-stream[data-type="${type}"]`).forEach(btn => {
+            btn.classList.remove('disabled');
+            btn.title = '';
+        });
+    });
+}
+
+/**
+ * Disable stream buttons by type
+ */
+function disableStreamButtons(types, reason) {
+    types.forEach(type => {
+        document.querySelectorAll(`.btn-stream[data-type="${type}"]`).forEach(btn => {
+            btn.classList.add('disabled');
+            btn.title = reason;
+        });
+    });
+}
+
+/**
  * Update the stream mode indicator badge
+ * Shows current view type and server streaming mode
  */
 function updateStreamModeIndicator() {
     const indicator = document.getElementById('stream-mode-indicator');
     if (!indicator) return;
     
-    if (streamingMode === 'mjpeg') {
-        indicator.textContent = 'MJPEG Only';
+    // Show what the user is currently viewing
+    if (currentStreamType === 'mjpeg' || currentStream === 'mjpeg') {
+        indicator.textContent = 'MJPEG';
         indicator.className = 'stream-mode-indicator mode-mjpeg';
-        indicator.title = 'go2rtc not detected - RTSP/WebRTC unavailable';
-    } else {
-        indicator.textContent = 'go2rtc';
+        indicator.title = `Viewing MJPEG stream (Server mode: ${streamingMode})`;
+    } else if (currentStreamType === 'native_rtc') {
+        indicator.textContent = 'Native WebRTC';
+        indicator.className = 'stream-mode-indicator mode-native-webrtc';
+        indicator.title = `Viewing Native WebRTC stream (Server mode: ${streamingMode})`;
+    } else if (currentStreamType === 'rtc') {
+        indicator.textContent = 'go2rtc WebRTC';
         indicator.className = 'stream-mode-indicator mode-go2rtc';
-        indicator.title = 'Full streaming available (RTSP/WebRTC/MJPEG)';
+        indicator.title = `Viewing go2rtc WebRTC stream (Server mode: ${streamingMode})`;
+    } else {
+        // Default based on server mode
+        if (streamingMode === 'go2rtc') {
+            indicator.textContent = 'go2rtc';
+            indicator.className = 'stream-mode-indicator mode-go2rtc';
+            indicator.title = 'Full streaming available (RTSP/WebRTC/MJPEG)';
+        } else if (streamingMode === 'native_webrtc') {
+            indicator.textContent = 'Native WebRTC';
+            indicator.className = 'stream-mode-indicator mode-native-webrtc';
+            indicator.title = 'Native WebRTC mode - RTSP unavailable';
+        } else {
+            indicator.textContent = 'MJPEG Only';
+            indicator.className = 'stream-mode-indicator mode-mjpeg';
+            indicator.title = 'MJPEG only - go2rtc/aiortc not available';
+        }
     }
 }
 

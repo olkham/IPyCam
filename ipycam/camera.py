@@ -39,6 +39,7 @@ from .http import IPCameraHTTPHandler
 from .discovery import WSDiscoveryServer
 from .ptz import PTZController
 from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
+from .webrtc import NativeWebRTCStreamer, is_webrtc_available
 
 
 class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -58,7 +59,9 @@ class IPCamera:
         self.config = config or CameraConfig()
         self.streamer: Optional[VideoStreamer] = None
         self.mjpeg_streamer: Optional[MJPEGStreamer] = None
+        self.webrtc_streamer: Optional[NativeWebRTCStreamer] = None
         self._use_mjpeg_fallback = False
+        self._streaming_mode = 'go2rtc'  # 'go2rtc', 'native_webrtc', or 'mjpeg'
         
         # Initialize PTZ controller
         self.ptz = PTZController(
@@ -112,29 +115,59 @@ class IPCamera:
         rtsp_available = check_rtsp_port_available(port=self.config.rtsp_port)
         
         if go2rtc_available and rtsp_available:
-            # Use go2rtc for streaming
+            # Use go2rtc for streaming (best option: RTSP + WebRTC + MJPEG)
             self._use_mjpeg_fallback = False
+            self._streaming_mode = 'go2rtc'
             stream_config = self.config.to_stream_config()
             self.streamer = VideoStreamer(stream_config)
             
             if not self.streamer.start(self.config.main_stream_push_url, self.config.sub_stream_push_url):
-                print("  ⚠ Failed to start video streamer, falling back to MJPEG")
-                self._use_mjpeg_fallback = True
+                print("  ⚠ Failed to start video streamer, trying native WebRTC fallback...")
+                self._try_native_webrtc_fallback(mjpeg_url)
             else:
                 print(f"  Main Stream: {self.config.main_stream_rtsp}")
                 print(f"  Sub Stream: {self.config.sub_stream_rtsp}")
                 print(f"  WebRTC: {self.config.webrtc_url}")
                 print(f"  MJPEG Stream: {mjpeg_url}")
         else:
-            # Fallback to native MJPEG streaming only
-            self._use_mjpeg_fallback = True
-            print("  ⚠ go2rtc not detected - using native MJPEG fallback")
-            print(f"  MJPEG Stream: {mjpeg_url}")
-            print("  Note: RTSP/WebRTC unavailable. Start go2rtc for full functionality:")
-            print("    go2rtc --config ipycam/go2rtc.yaml")
+            # go2rtc not available - try native WebRTC as fallback
+            self._try_native_webrtc_fallback(mjpeg_url)
         
         self._running = True
         return True
+    
+    def _try_native_webrtc_fallback(self, mjpeg_url: str):
+        """Try to start native WebRTC, fall back to MJPEG-only if not available."""
+        if is_webrtc_available():
+            try:
+                self.webrtc_streamer = NativeWebRTCStreamer(
+                    fps=self.config.main_fps,
+                    width=self.config.main_width,
+                    height=self.config.main_height
+                )
+                if self.webrtc_streamer.start():
+                    self._use_mjpeg_fallback = False
+                    self._streaming_mode = 'native_webrtc'
+                    webrtc_native_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/api/webrtc/offer"
+                    print("  ⚠ go2rtc not detected - using native WebRTC fallback")
+                    print(f"  Native WebRTC: {webrtc_native_url}")
+                    print(f"  MJPEG Stream: {mjpeg_url}")
+                    print("  Note: RTSP unavailable. Start go2rtc for full functionality:")
+                    print("    go2rtc --config ipycam/go2rtc.yaml")
+                    return
+                else:
+                    self.webrtc_streamer = None
+            except Exception as e:
+                print(f"  ⚠ Failed to start native WebRTC: {e}")
+                self.webrtc_streamer = None
+        
+        # Final fallback: MJPEG only
+        self._use_mjpeg_fallback = True
+        self._streaming_mode = 'mjpeg'
+        print("  ⚠ No WebRTC available - using MJPEG-only fallback")
+        print(f"  MJPEG Stream: {mjpeg_url}")
+        print("  Note: Install aiortc for native WebRTC: pip install aiortc")
+        print("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
     
     def stop(self):
         """Stop all camera services"""
@@ -145,6 +178,9 @@ class IPCamera:
         
         if self.streamer:
             self.streamer.stop()
+        
+        if self.webrtc_streamer:
+            self.webrtc_streamer.stop()
         
         if self.mjpeg_streamer:
             self.mjpeg_streamer.stop()
@@ -173,6 +209,10 @@ class IPCamera:
         # Always send to MJPEG streamer (for web UI MJPEG view)
         if self.mjpeg_streamer:
             self.mjpeg_streamer.stream_frame(frame)
+        
+        # Send to native WebRTC streamer only if there are active connections
+        if self.webrtc_streamer and self.webrtc_streamer.connection_count > 0:
+            self.webrtc_streamer.stream_frame(frame)
         
         # Send to go2rtc streamer if available (not in fallback mode)
         result = True
@@ -270,9 +310,18 @@ class IPCamera:
         # During restart, streamer is temporarily None - don't exit the loop
         if self._restarting:
             return self._running
-        if self._use_mjpeg_fallback:
+        
+        if self._streaming_mode == 'go2rtc':
+            return self._running and self.streamer is not None and self.streamer.is_running
+        elif self._streaming_mode == 'native_webrtc':
+            return self._running and self.webrtc_streamer is not None and self.webrtc_streamer.is_running
+        else:  # mjpeg fallback
             return self._running and self.mjpeg_streamer is not None and self.mjpeg_streamer.is_running
-        return self._running and self.streamer is not None and self.streamer.is_running
+    
+    @property
+    def streaming_mode(self) -> str:
+        """Get the current streaming mode: 'go2rtc', 'native_webrtc', or 'mjpeg'"""
+        return self._streaming_mode
     
     @property
     def using_mjpeg_fallback(self) -> bool:

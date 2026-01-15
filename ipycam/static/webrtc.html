@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Native WebRTC Stream</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .container {
+            width: 100%;
+            max-width: 1280px;
+            padding: 20px;
+        }
+        #video {
+            width: 100%;
+            height: auto;
+            background: #1a1a2e;
+            border-radius: 8px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            justify-content: center;
+        }
+        button {
+            padding: 10px 20px;
+            background: #0f3460;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #16537e;
+        }
+        button:disabled {
+            background: #333;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            margin-top: 10px;
+            color: #888;
+            font-size: 12px;
+        }
+        .status.connected {
+            color: #00ff88;
+        }
+        .status.connecting {
+            color: #ffaa00;
+        }
+        .status.error {
+            color: #e94560;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="controls">
+            <button id="btn-start" onclick="start()">Connect</button>
+            <button id="btn-stop" onclick="stop()" disabled>Disconnect</button>
+        </div>
+        <div id="status" class="status">Click Connect to start streaming</div>
+    </div>
+
+    <script>
+        let pc = null;
+        const video = document.getElementById('video');
+        const statusEl = document.getElementById('status');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        
+        // Get the signaling endpoint from query params or use current origin
+        const params = new URLSearchParams(window.location.search);
+        const signalingUrl = params.get('url') || (window.location.origin + '/api/webrtc/offer');
+        
+        function setStatus(message, className = '') {
+            statusEl.textContent = message;
+            statusEl.className = 'status ' + className;
+        }
+        
+        async function start() {
+            if (pc) {
+                await stop();
+            }
+            
+            setStatus('Connecting...', 'connecting');
+            btnStart.disabled = true;
+            
+            try {
+                // Create peer connection
+                pc = new RTCPeerConnection({
+                    sdpSemantics: 'unified-plan',
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+                
+                // Handle incoming tracks
+                pc.addEventListener('track', (evt) => {
+                    if (evt.track.kind === 'video') {
+                        video.srcObject = evt.streams[0];
+                        setStatus('Connected', 'connected');
+                    }
+                });
+                
+                // Monitor connection state
+                pc.addEventListener('connectionstatechange', () => {
+                    console.log('Connection state:', pc.connectionState);
+                    if (pc.connectionState === 'connected') {
+                        setStatus('Connected', 'connected');
+                    } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                        setStatus('Connection lost', 'error');
+                    }
+                });
+                
+                pc.addEventListener('iceconnectionstatechange', () => {
+                    console.log('ICE state:', pc.iceConnectionState);
+                });
+                
+                // Add transceiver to receive video
+                pc.addTransceiver('video', { direction: 'recvonly' });
+                
+                // Create offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                // Wait for ICE gathering to complete
+                await new Promise((resolve) => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        pc.addEventListener('icegatheringstatechange', () => {
+                            if (pc.iceGatheringState === 'complete') {
+                                resolve();
+                            }
+                        });
+                    }
+                });
+                
+                // Send offer to server
+                const response = await fetch(signalingUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Server error');
+                }
+                
+                const answer = await response.json();
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+                
+            } catch (err) {
+                console.error('WebRTC error:', err);
+                setStatus('Error: ' + err.message, 'error');
+                btnStart.disabled = false;
+                await stop();
+            }
+        }
+        
+        async function stop() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            video.srcObject = null;
+            btnStart.disabled = false;
+            btnStop.disabled = true;
+            setStatus('Disconnected');
+        }
+        
+        // Auto-connect on load if autoplay param is set
+        window.addEventListener('load', () => {
+            if (params.get('autoplay') === '1') {
+                start();
+            }
+        });
+    </script>
+</body>
+</html>

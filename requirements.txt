@@ -2,5 +2,10 @@
 numpy>=1.24.0
 opencv-python>=4.8.0
 
+# Optional: Native WebRTC support (fallback when go2rtc not available)
+# Enables WebRTC streaming without external dependencies
+aiortc>=1.6.0
+aiohttp>=3.9.0
+
 # Optional: for better performance
 # opencv-contrib-python>=4.8.0
