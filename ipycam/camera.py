@@ -31,6 +31,7 @@ import numpy as np
 import cv2
 from typing import Optional
 
+from .__version__ import __version__
 from .config import CameraConfig
 from .streamer import VideoStreamer, StreamStats
 from .onvif import ONVIFService
@@ -298,6 +299,7 @@ class IPCamera:
             '{{source_icon}}': source_icon,
             '{{source_type_label}}': source_type_label,
             '{{source_info}}': source_info,
+            '{{version}}': __version__,
         }
         
         for key, value in replacements.items():

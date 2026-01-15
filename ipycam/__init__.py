@@ -22,7 +22,7 @@ Usage:
     camera.stop()
 """
 
-__version__ = "1.0.0"
+from .__version__ import __version__
 
 from .config import CameraConfig
 from .camera import IPCamera

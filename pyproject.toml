@@ -1,6 +1,6 @@
 [project]
 name = "ipycam"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Pure Python Virtual IP Camera with ONVIF support"
 authors = [
     {name = "Oliver Hamilton", email = "oliver9523@gmail.com"}
@@ -37,6 +37,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["ipycam"]
 include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "ipycam.__version__.__version__"}
 
 [tool.setuptools.package-data]
 ipycam = ["static/**/*"]
