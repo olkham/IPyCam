@@ -8,8 +8,8 @@ Usage:
 Examples:
     python -m ipycam
     python -m ipycam --config camera_config.json
-    python -m ipycam --camera 0
-    python -m ipycam --camera rtsp://192.168.1.100/stream
+    python -m ipycam --source 0
+    python -m ipycam --source rtsp://192.168.1.100/stream
     python -m ipycam --no-timestamp
 """
 
@@ -64,9 +64,9 @@ def main():
 Examples:
   python -m ipycam                              # Use webcam with default config
   python -m ipycam --config custom.json         # Use custom config file
-  python -m ipycam --camera 1                   # Use second webcam
-  python -m ipycam --camera video.mp4           # Stream from video file
-  python -m ipycam --camera rtsp://...          # Stream from RTSP source
+  python -m ipycam --source 1                   # Use second webcam
+  python -m ipycam --source video.mp4           # Stream from video file
+  python -m ipycam --source rtsp://...          # Stream from RTSP source
   python -m ipycam --no-timestamp               # Disable timestamp overlay
   python -m ipycam --width 1280 --height 720    # Override resolution
   python -m ipycam --fps 60                     # Override FPS
@@ -81,7 +81,7 @@ Examples:
     )
     
     parser.add_argument(
-        '--camera',
+        '--source',
         type=str,
         default='0',
         help='Camera source: device index (0), file path, or URL (default: 0)'
@@ -134,8 +134,8 @@ Examples:
     if args.timestamp_position:
         config.timestamp_position = args.timestamp_position
     
-    # Infer and set source type from camera argument
-    source_type, source_info = infer_source_type(args.camera)
+    # Infer and set source type from source argument
+    source_type, source_info = infer_source_type(args.source)
     config.source_type = source_type
     config.source_info = source_info
     
@@ -157,9 +157,9 @@ Examples:
     # Open camera source
     # Try to parse as int (device index), otherwise treat as path/URL
     try:
-        camera_source = int(args.camera)
+        camera_source = int(args.source)
     except ValueError:
-        camera_source = args.camera
+        camera_source = args.source
     
     print(f"Opening camera source: {camera_source}")
     cap = cv2.VideoCapture(camera_source)
