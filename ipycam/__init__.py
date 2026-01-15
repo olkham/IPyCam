@@ -32,6 +32,7 @@ from .onvif import ONVIFService
 from .discovery import WSDiscoveryServer
 from .http import IPCameraHTTPHandler
 from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
+from .webrtc import NativeWebRTCStreamer, WebRTCStats, is_webrtc_available
 
 __all__ = [
     # Main classes
@@ -46,6 +47,10 @@ __all__ = [
     "MJPEGStreamer",
     "check_go2rtc_running",
     "check_rtsp_port_available",
+    # Native WebRTC fallback
+    "NativeWebRTCStreamer",
+    "WebRTCStats",
+    "is_webrtc_available",
     # PTZ
     "PTZController",
     "PTZState",

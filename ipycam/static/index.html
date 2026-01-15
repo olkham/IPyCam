@@ -15,11 +15,13 @@
                 <div class="card preview" id="preview-container">
                     <iframe id="preview-iframe" src="{{preview_url}}" data-main-stream="{{main_stream_name}}" data-sub-stream="{{sub_stream_name}}" data-api-url="{{webrtc_url}}" allowfullscreen></iframe>
                     <img id="preview-mjpeg" src="" style="display: none; width: 100%; height: 700px; object-fit: contain;" alt="MJPEG Stream">
+                    <video id="preview-native-rtc" autoplay playsinline muted style="display: none; width: 100%; height: 700px; object-fit: contain; background: #1a1a2e;"></video>
                 </div>
                 <div class="preview-toolbar">
                     <div class="stream-switcher">
                         <button class="btn-stream active" data-stream="main" data-type="rtc" onclick="switchStream('main', 'rtc')">Main</button>
                         <button class="btn-stream" data-stream="sub" data-type="rtc" onclick="switchStream('sub', 'rtc')">Sub</button>
+                        <button class="btn-stream" data-stream="main" data-type="native_rtc" onclick="switchStream('main', 'native_rtc')" title="Python Native WebRTC (aiortc)">WebRTC</button>
                         <button class="btn-stream" data-stream="mjpeg" data-type="mjpeg" onclick="switchStream('mjpeg', 'mjpeg')">MJPEG</button>
                     </div>
                     <div id="stream-mode-indicator" class="stream-mode-indicator"></div>

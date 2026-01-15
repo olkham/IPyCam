@@ -115,6 +115,11 @@ h2 {
     color: #00d4ff;
 }
 
+.stream-mode-indicator.mode-native-webrtc {
+    background: rgba(0, 255, 136, 0.2);
+    color: #00ff88;
+}
+
 .stream-mode-indicator.mode-mjpeg {
     background: rgba(255, 170, 0, 0.2);
     color: #ffaa00;
