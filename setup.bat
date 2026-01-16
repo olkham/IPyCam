@@ -66,8 +66,8 @@ if exist go2rtc.exe (
     set /p "download=Would you like to download go2rtc? (Y/N): "
     if /i "!download!"=="y" (
         echo.
-        echo Downloading go2rtc...
-        powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://github.com/AlexxIT/go2rtc/releases/download/v1.9.13/go2rtc_win64.zip', 'go2rtc_win64.zip'); Write-Host 'Download completed successfully' } catch { Write-Host 'ERROR: Failed to download go2rtc'; exit 1 }"
+        echo Downloading go2rtc v1.9.9...
+        powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://github.com/AlexxIT/go2rtc/releases/download/v1.9.9/go2rtc_win64.zip', 'go2rtc_win64.zip'); Write-Host 'Download completed successfully' } catch { Write-Host 'ERROR: Failed to download go2rtc'; exit 1 }"
         if errorlevel 1 (
             echo ERROR: Failed to download go2rtc
             pause

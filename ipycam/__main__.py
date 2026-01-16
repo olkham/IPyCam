@@ -117,6 +117,13 @@ Examples:
         help='Timestamp position'
     )
     
+    parser.add_argument(
+        '--hw',
+        choices=['auto', 'nvenc', 'qsv', 'cpu'],
+        default=None,
+        help='Hardware acceleration: auto, nvenc, qsv, or cpu'
+    )
+    
     args = parser.parse_args()
     
     # Load config from file, or use defaults if not found
@@ -133,6 +140,8 @@ Examples:
         config.show_timestamp = False
     if args.timestamp_position:
         config.timestamp_position = args.timestamp_position
+    if args.hw:
+        config.hw_accel = args.hw
     
     # Infer and set source type from source argument
     source_type, source_info = infer_source_type(args.source)
