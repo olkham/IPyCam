@@ -46,7 +46,7 @@ class CameraConfig:
     # Main stream
     main_width: int = 1920
     main_height: int = 1080
-    main_fps: int = 60
+    main_fps: int = 30
     main_bitrate: str = "8M"
     main_stream_name: str = "video_main"
     
