@@ -81,7 +81,7 @@ dmypy.json
 *.log
 
 # Local config
-camera_config.json
+# camera_config.json
 ptz_presets.json
 
 # video files
