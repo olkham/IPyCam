@@ -155,7 +155,7 @@ class ONVIFService:
         return self._wrap_envelope(body)
 
     def get_snapshot_uri(self, body: str) -> str:
-        uri = f"http://{self.config.local_ip}:{self.config.web_port}/snapshot.jpg"
+        uri = f"http://{self.config.local_ip}:{self.config.web_port}/{self.config.snapshot_url}"
         body = self._render('get_snapshot_uri', snapshot_uri=uri)
         return self._wrap_envelope(body)
 

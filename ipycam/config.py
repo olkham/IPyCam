@@ -4,6 +4,7 @@
 import json
 import socket
 from dataclasses import dataclass, asdict
+from .__version__ import __version__
 
 try:
     from .streamer import StreamConfig, HWAccel
@@ -32,7 +33,7 @@ class CameraConfig:
     manufacturer: str = "PythonCam"
     model: str = "VirtualCam-1"
     serial_number: str = "PY-000001"
-    firmware_version: str = "1.0.0"
+    firmware_version: str = __version__
     
     # Network
     local_ip: str = ""
@@ -58,6 +59,7 @@ class CameraConfig:
     
     #mjpeg fallback
     mjpeg_url: str = "stream.mjpeg"
+    snapshot_url: str = "snapshot.jpg"
     
     # Encoding
     hw_accel: str = "auto"

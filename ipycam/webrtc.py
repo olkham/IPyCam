@@ -34,9 +34,9 @@ except ImportError:
 logger = logging.getLogger("ipycam.webrtc")
 
 
-def check_aiortc_available() -> bool:
-    """Check if aiortc is installed and available."""
-    return AIORTC_AVAILABLE
+# def check_aiortc_available() -> bool:
+#     """Check if aiortc is installed and available."""
+#     return AIORTC_AVAILABLE
 
 
 def is_webrtc_available() -> bool:

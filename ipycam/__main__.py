@@ -151,7 +151,7 @@ Examples:
     print("IP Camera is running!")
     print("="*50)
     print(f"\nOpen Web UI: http://{config.local_ip}:{config.onvif_port}/")
-    print(f"Snapshot URL: http://{config.local_ip}:{config.onvif_port}/snapshot.jpg")
+    print(f"Snapshot URL: http://{config.local_ip}:{config.onvif_port}/{config.snapshot_url}")
     print("Press Ctrl+C to stop\n")
     
     # Open camera source

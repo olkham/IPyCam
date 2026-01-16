@@ -260,11 +260,9 @@ function checkStreamAvailability() {
             
             // Configure UI based on streaming mode
             if (streamingMode === 'go2rtc') {
-                // Full functionality available
+                // Full functionality available - go2rtc WebRTC is superior, disable native WebRTC
                 enableStreamButtons(['rtc', 'mjpeg']);
-                if (nativeWebRTCAvailable) {
-                    enableStreamButtons(['native_rtc']);
-                }
+                disableStreamButtons(['native_rtc'], 'go2rtc WebRTC is active (better performance)');
             } else if (streamingMode === 'native_webrtc') {
                 // Native WebRTC mode - disable go2rtc buttons, default to MJPEG (faster start)
                 disableStreamButtons(['rtc'], 'go2rtc WebRTC unavailable');

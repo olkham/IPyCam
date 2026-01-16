@@ -42,7 +42,7 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.serve_ptz_status()
         elif path == '/api/webrtc/status':
             self.serve_webrtc_status()
-        elif path == '/snapshot.jpg':
+        elif path == f'/{self.camera.config.snapshot_url}':
             self.serve_snapshot()
         elif path == f'/{self.camera.config.mjpeg_url}':
             self.serve_mjpeg_stream()
