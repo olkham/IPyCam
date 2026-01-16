@@ -27,6 +27,9 @@ dependencies = [
     "aiortc>=1.14.0",
 ]
 
+[project.scripts]
+ipycam = "ipycam.__main__:main"
+
 [project.optional-dependencies]
 camera360 = [
     "framesource @ git+https://github.com/olkham/FrameSource.git",
