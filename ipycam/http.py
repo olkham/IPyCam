@@ -30,8 +30,6 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         
         if path == '/' or path == '/index.html':
             self.serve_web_ui()
-        elif path == '/webrtc.html':
-            self.serve_webrtc_page()
         elif path.startswith('/static/'):
             self.serve_static(path)
         elif path == '/api/config':
@@ -40,8 +38,6 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.serve_stats()
         elif path == '/api/ptz':
             self.serve_ptz_status()
-        elif path == '/api/webrtc/status':
-            self.serve_webrtc_status()
         elif path == f'/{self.camera.config.snapshot_url}':
             self.serve_snapshot()
         elif path == f'/{self.camera.config.mjpeg_url}':
@@ -117,22 +113,7 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/html')
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
-    
-    def serve_webrtc_page(self):
-        """Serve the native WebRTC viewer page"""
-        static_dir = os.path.join(os.path.dirname(__file__), 'static')
-        file_path = os.path.join(static_dir, 'webrtc.html')
-        
-        try:
-            with open(file_path, 'rb') as f:
-                content = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html')
-            self.send_header('Content-Length', len(content))
-            self.end_headers()
-            self.wfile.write(content)
-        except FileNotFoundError:
-            self.send_error(404, "WebRTC viewer not found")
+
     
     def serve_static(self, path: str):
         """Serve static files (CSS, JS)"""
@@ -416,28 +397,6 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
 
-    def serve_webrtc_status(self):
-        """Return native WebRTC streamer status"""
-        status = {
-            'available': self.camera.webrtc_streamer is not None,
-            'running': False,
-            'connections': 0,
-            'frames_sent': 0,
-            'actual_fps': 0,
-        }
-        
-        if self.camera.webrtc_streamer:
-            status['running'] = self.camera.webrtc_streamer.is_running
-            status['connections'] = self.camera.webrtc_streamer.connection_count
-            status['frames_sent'] = self.camera.webrtc_streamer.stats.frames_sent
-            status['actual_fps'] = round(self.camera.webrtc_streamer.stats.actual_fps, 1)
-        
-        response = json.dumps(status).encode('utf-8')
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(response)))
-        self.end_headers()
-        self.wfile.write(response)
 
     def handle_webrtc_offer(self):
         """Handle WebRTC offer for native WebRTC streaming"""
