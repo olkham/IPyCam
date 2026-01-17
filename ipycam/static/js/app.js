@@ -353,6 +353,51 @@ function updateStreamModeIndicator() {
 }
 
 /**
+ * Format large numbers with units (k, M, B)
+ */
+function formatNumber(num) {
+    if (num === '-' || num === undefined || num === null) return '-';
+    const n = parseInt(num);
+    if (isNaN(n)) return '-';
+    
+    if (n >= 1000000000) {
+        return (n / 1000000000).toFixed(1) + 'B';
+    } else if (n >= 1000000) {
+        return (n / 1000000).toFixed(1) + 'M';
+    } else if (n >= 1000) {
+        return (n / 1000).toFixed(1) + 'k';
+    }
+    return n.toString();
+}
+
+/**
+ * Format uptime in human-readable units
+ */
+function formatUptime(seconds) {
+    if (!seconds || seconds === '-') return '-';
+    const s = parseInt(seconds);
+    if (isNaN(s)) return '-';
+    
+    const years = Math.floor(s / 31536000);
+    const days = Math.floor((s % 31536000) / 86400);
+    const hours = Math.floor((s % 86400) / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    
+    if (years > 0) {
+        return `${years}y ${days}d`;
+    } else if (days > 0) {
+        return `${days}d ${hours}h`;
+    } else if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    } else {
+        return `${secs}s`;
+    }
+}
+
+/**
  * Update stats display from server
  */
 function updateStats() {
@@ -380,8 +425,8 @@ function updateStats() {
             }
             
             document.getElementById('fps').textContent = fps;
-            document.getElementById('frames').textContent = frames;
-            document.getElementById('uptime').textContent = uptime ? Math.floor(uptime) + 's' : '-';
+            document.getElementById('frames').textContent = formatNumber(frames);
+            document.getElementById('uptime').textContent = formatUptime(uptime);
             document.getElementById('dropped').textContent = data.dropped_frames || '0';
             document.getElementById('status').className = 'status ' + (data.is_streaming ? 'online' : 'offline');
             
