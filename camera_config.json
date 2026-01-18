@@ -3,7 +3,7 @@
   "manufacturer": "PythonCam",
   "model": "VirtualCam-1",
   "serial_number": "PY-000001",
-  "firmware_version": "1.0.0",
+  "firmware_version": "1.2.0",
   "onvif_port": 8080,
   "rtsp_port": 8554,
   "rtmp_port": 1935,
