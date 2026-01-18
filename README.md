@@ -24,6 +24,11 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 
 ## Quick Start
 
+Clone the repo:
+```bash
+git clone https://github.com/olkham/IPyCam.git
+```
+
 ### Setup Scripts (Windows and Linux)
 
 If you prefer a guided setup, use the provided scripts. They install dependencies and prepare the environment for running the examples.
