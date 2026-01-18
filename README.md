@@ -2,6 +2,11 @@
 
 A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP streaming, and PTZ controls. Perfect for testing, development, or creating custom camera solutions.
 
+## 📺 Demo Video
+https://github.com/user-attachments/assets/1d3afd23-1ab8-40f6-876c-3f3f9a0089fe
+
+[YouTube](https://www.youtube.com/watch?v=9AkqjnZRQTE)
+
 ## Features
 
 - **ONVIF Compliance**: Full WS-Discovery support for automatic camera detection
