@@ -206,8 +206,8 @@ class IPCamera:
         
         self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted + timestamp)
         
-        # Always send to MJPEG streamer (for web UI MJPEG view)
-        if self.mjpeg_streamer:
+        # Send to MJPEG streamer only when clients are connected
+        if self.mjpeg_streamer and self.mjpeg_streamer.client_count > 0:
             self.mjpeg_streamer.stream_frame(frame)
         
         # Send to native WebRTC streamer only if there are active connections

@@ -15,6 +15,7 @@ Examples:
 
 import argparse
 import os
+import platform
 import cv2
 from . import IPCamera, CameraConfig
 
@@ -171,12 +172,23 @@ Examples:
         camera_source = args.source
     
     print(f"Opening camera source: {camera_source}")
-    cap = cv2.VideoCapture(camera_source)
+    # Prefer V4L2 on Linux for consistent FPS control
+    if isinstance(camera_source, int) and platform.system().lower() == "linux":
+        cap = cv2.VideoCapture(camera_source, cv2.CAP_V4L2)
+    else:
+        cap = cv2.VideoCapture(camera_source)
     
     # Set resolution if using webcam (device index)
     if isinstance(camera_source, int):
+        # Request MJPEG + low buffer for better FPS on Pi
+        fourcc_func = getattr(cv2, "VideoWriter_fourcc", None)
+        if fourcc_func is None:
+            fourcc_func = cv2.VideoWriter.fourcc
+        cap.set(cv2.CAP_PROP_FOURCC, fourcc_func(*"MJPG"))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.main_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.main_height)
+        cap.set(cv2.CAP_PROP_FPS, config.main_fps)
     
     if not cap.isOpened():
         print(f"Error: Could not open camera source: {camera_source}")
