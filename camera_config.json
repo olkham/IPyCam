@@ -20,6 +20,7 @@
   "sub_bitrate": "1M",
   "sub_stream_name": "video_sub",
   "mjpeg_url": "stream.mjpeg",
+  "snapshot_url": "snapshot.jpg",
   "hw_accel": "auto",
   "show_timestamp": true,
   "timestamp_format": "%Y-%m-%d %H:%M:%S",
