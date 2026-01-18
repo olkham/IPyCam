@@ -24,6 +24,24 @@ A lightweight, pure Python virtual IP camera that provides ONVIF discovery, RTSP
 
 ## Quick Start
 
+### Setup Scripts (Windows and Linux)
+
+If you prefer a guided setup, use the provided scripts. They install dependencies and prepare the environment for running the examples.
+
+**Windows (PowerShell or Command Prompt):**
+```bat
+setup.bat
+```
+
+**Linux/macOS (bash):**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+> **Tip**: Run the script from the project root (the folder that contains `setup.bat` and `setup.sh`).
+
+
 ### Installation
 
 Install directly from GitHub:
