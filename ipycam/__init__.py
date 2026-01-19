@@ -33,6 +33,7 @@ from .discovery import WSDiscoveryServer
 from .http import IPCameraHTTPHandler
 from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
 from .webrtc import NativeWebRTCStreamer, WebRTCStats, is_webrtc_available
+from .rtsp import NativeRTSPServer, is_native_rtsp_available
 
 __all__ = [
     # Main classes
@@ -51,6 +52,9 @@ __all__ = [
     "NativeWebRTCStreamer",
     "WebRTCStats",
     "is_webrtc_available",
+    # Native RTSP fallback
+    "NativeRTSPServer",
+    "is_native_rtsp_available",
     # PTZ
     "PTZController",
     "PTZState",

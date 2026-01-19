@@ -40,6 +40,7 @@ from .discovery import WSDiscoveryServer
 from .ptz import PTZController
 from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
 from .webrtc import NativeWebRTCStreamer, is_webrtc_available
+from .rtsp import NativeRTSPServer, is_native_rtsp_available
 
 
 class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -60,6 +61,7 @@ class IPCamera:
         self.streamer: Optional[VideoStreamer] = None
         self.mjpeg_streamer: Optional[MJPEGStreamer] = None
         self.webrtc_streamer: Optional[NativeWebRTCStreamer] = None
+        self.rtsp_server: Optional[NativeRTSPServer] = None  # Native RTSP fallback
         self._use_mjpeg_fallback = False
         self._streaming_mode = 'go2rtc'  # 'go2rtc', 'native_webrtc', or 'mjpeg'
         
@@ -137,7 +139,47 @@ class IPCamera:
         return True
     
     def _try_native_webrtc_fallback(self, mjpeg_url: str):
-        """Try to start native WebRTC, fall back to MJPEG-only if not available."""
+        """Try to start native RTSP + WebRTC, fall back to MJPEG-only if not available."""
+        # Try to start native RTSP server (requires FFmpeg)
+        rtsp_started = False
+        if is_native_rtsp_available():
+            try:
+                self.rtsp_server = NativeRTSPServer(port=self.config.rtsp_port)
+                
+                # Add main stream
+                self.rtsp_server.add_stream(
+                    name=self.config.main_stream_name,
+                    width=self.config.main_width,
+                    height=self.config.main_height,
+                    fps=self.config.main_fps,
+                    bitrate=self.config.main_bitrate
+                )
+                
+                # Add sub stream
+                self.rtsp_server.add_stream(
+                    name=self.config.sub_stream_name,
+                    width=self.config.sub_width,
+                    height=self.config.sub_height,
+                    fps=self.config.sub_fps,
+                    bitrate=self.config.sub_bitrate
+                )
+                
+                if self.rtsp_server.start():
+                    rtsp_started = True
+                    print("  ✓ Native RTSP server started")
+                    print(f"    Main Stream: {self.config.main_stream_rtsp}")
+                    print(f"    Sub Stream: {self.config.sub_stream_rtsp}")
+                else:
+                    print("  ⚠ Failed to start native RTSP server")
+                    self.rtsp_server = None
+            except Exception as e:
+                print(f"  ⚠ Failed to start native RTSP server: {e}")
+                self.rtsp_server = None
+        else:
+            print("  ⚠ Native RTSP unavailable (FFmpeg not found)")
+        
+        # Try to start native WebRTC
+        webrtc_started = False
         if is_webrtc_available():
             try:
                 self.webrtc_streamer = NativeWebRTCStreamer(
@@ -146,28 +188,39 @@ class IPCamera:
                     height=self.config.main_height
                 )
                 if self.webrtc_streamer.start():
-                    self._use_mjpeg_fallback = False
-                    self._streaming_mode = 'native_webrtc'
+                    webrtc_started = True
                     webrtc_native_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/api/webrtc/offer"
-                    print("  ⚠ go2rtc not detected - using native WebRTC fallback")
-                    print(f"  Native WebRTC: {webrtc_native_url}")
-                    print(f"  MJPEG Stream: {mjpeg_url}")
-                    print("  Note: RTSP unavailable. Start go2rtc for full functionality:")
-                    print("    go2rtc --config ipycam/go2rtc.yaml")
-                    return
+                    print(f"  ✓ Native WebRTC started: {webrtc_native_url}")
                 else:
                     self.webrtc_streamer = None
             except Exception as e:
                 print(f"  ⚠ Failed to start native WebRTC: {e}")
                 self.webrtc_streamer = None
         
-        # Final fallback: MJPEG only
-        self._use_mjpeg_fallback = True
-        self._streaming_mode = 'mjpeg'
-        print("  ⚠ No WebRTC available - using MJPEG-only fallback")
+        # Determine streaming mode based on what's available
+        if rtsp_started and webrtc_started:
+            self._use_mjpeg_fallback = False
+            self._streaming_mode = 'native_rtsp_webrtc'
+            print("  ⚠ go2rtc not detected - using native RTSP + WebRTC fallback")
+        elif rtsp_started:
+            self._use_mjpeg_fallback = False
+            self._streaming_mode = 'native_rtsp'
+            print("  ⚠ go2rtc not detected - using native RTSP fallback")
+            print("  Note: Install aiortc for native WebRTC: pip install aiortc")
+        elif webrtc_started:
+            self._use_mjpeg_fallback = False
+            self._streaming_mode = 'native_webrtc'
+            print("  ⚠ go2rtc not detected - using native WebRTC fallback")
+            print("  Note: RTSP unavailable (FFmpeg not found)")
+        else:
+            # Final fallback: MJPEG only
+            self._use_mjpeg_fallback = True
+            self._streaming_mode = 'mjpeg'
+            print("  ⚠ No RTSP/WebRTC available - using MJPEG-only fallback")
+            print("  Note: Install aiortc for native WebRTC: pip install aiortc")
+            print("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
+        
         print(f"  MJPEG Stream: {mjpeg_url}")
-        print("  Note: Install aiortc for native WebRTC: pip install aiortc")
-        print("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
     
     def stop(self):
         """Stop all camera services"""
@@ -181,6 +234,9 @@ class IPCamera:
         
         if self.webrtc_streamer:
             self.webrtc_streamer.stop()
+        
+        if self.rtsp_server:
+            self.rtsp_server.stop()
         
         if self.mjpeg_streamer:
             self.mjpeg_streamer.stop()
@@ -213,6 +269,17 @@ class IPCamera:
         # Send to native WebRTC streamer only if there are active connections
         if self.webrtc_streamer and self.webrtc_streamer.connection_count > 0:
             self.webrtc_streamer.stream_frame(frame)
+        
+        # Send to native RTSP server if active (fallback mode)
+        if self.rtsp_server and self.rtsp_server.is_running:
+            # Send to main stream
+            self.rtsp_server.stream_frame(self.config.main_stream_name, frame)
+            # Send to sub stream (resized)
+            if self.config.sub_width != self.config.main_width or self.config.sub_height != self.config.main_height:
+                sub_frame = cv2.resize(frame, (self.config.sub_width, self.config.sub_height))
+                self.rtsp_server.stream_frame(self.config.sub_stream_name, sub_frame)
+            else:
+                self.rtsp_server.stream_frame(self.config.sub_stream_name, frame)
         
         # Send to go2rtc streamer if available (not in fallback mode)
         result = True
@@ -315,12 +382,15 @@ class IPCamera:
             return self._running and self.streamer is not None and self.streamer.is_running
         elif self._streaming_mode == 'native_webrtc':
             return self._running and self.webrtc_streamer is not None and self.webrtc_streamer.is_running
+        elif self._streaming_mode in ('native_rtsp', 'native_rtsp_webrtc'):
+            # Native RTSP mode - check if RTSP server is running
+            return self._running and self.rtsp_server is not None and self.rtsp_server.is_running
         else:  # mjpeg fallback
             return self._running and self.mjpeg_streamer is not None and self.mjpeg_streamer.is_running
     
     @property
     def streaming_mode(self) -> str:
-        """Get the current streaming mode: 'go2rtc', 'native_webrtc', or 'mjpeg'"""
+        """Get the current streaming mode: 'go2rtc', 'native_rtsp', 'native_rtsp_webrtc', 'native_webrtc', or 'mjpeg'"""
         return self._streaming_mode
     
     @property
