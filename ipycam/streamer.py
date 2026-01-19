@@ -160,8 +160,17 @@ class VideoStreamer:
             hw_order = [self.config.hw_accel]
         
         for hw_type in hw_order:
-            print(f"Trying {hw_type.value.upper()}...")
+            print(f"Trying {hw_type.value.upper()}...", end=" ", flush=True)
+            
+            # Quick availability check first (prevents hanging)
+            if not self._check_hw_encoder_available(hw_type):
+                print(f"✗ {hw_type.value.upper()} not available", flush=True)
+                continue
+            
+            print(f"✓ {hw_type.value.upper()} available", flush=True)
+                
             try:
+                print(f"Starting with {hw_type.value.upper()}...", end=" ", flush=True)
                 # Reset stderr buffer for this attempt
                 self._ffmpeg_stderr_buffer = []
                 
@@ -172,7 +181,7 @@ class VideoStreamer:
                         self._active_hw_accel = hw_type.value
                         self._is_running = True
                         print(f"✓ Streamer started with {hw_type.value.upper()} acceleration")
-                        print(f"  Primary:   {rtmp_url}")
+                        print(f"  Primary: {rtmp_url}")
                         if rtmp_url_sub:
                             print(f"  Substream: {rtmp_url_sub}")
                         return True
@@ -255,6 +264,33 @@ class VideoStreamer:
             self.stats.dropped_frames += 1
             return False
     
+    def _check_hw_encoder_available(self, hw_type: HWAccel) -> bool:
+        """Quick check if a hardware encoder is available"""
+        if hw_type == HWAccel.CPU:
+            return True
+        
+        encoder_name = {
+            HWAccel.NVENC: "h264_nvenc",
+            HWAccel.QSV: "h264_qsv",
+        }.get(hw_type)
+        
+        if not encoder_name:
+            return True
+        
+        try:
+            # Just check if the encoder is compiled in - don't try to init it
+            # The actual init can hang on Windows, so we'll let streaming handle failures
+            list_cmd = ["ffmpeg", "-hide_banner", "-encoders"]
+            list_result = subprocess.run(
+                list_cmd,
+                capture_output=True,
+                timeout=5.0,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            return encoder_name in list_result.stdout.decode('utf-8', errors='ignore')
+        except Exception:
+            return False
+    
     def _start_ffmpeg(self, rtmp_url: str, rtmp_url_sub: Optional[str], hw_type: HWAccel):
         """Start FFmpeg with the specified hardware acceleration"""
         
@@ -320,7 +356,7 @@ class VideoStreamer:
             "-g", str(self.config.keyframe_interval),
             "-b:v", self.config.bitrate,
             "-maxrate", self.config.bitrate,
-            "-bufsize", "8M",
+            "-bufsize", "1M",  # Smaller buffer for faster startup
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts+flush_packets",
         ])
@@ -394,18 +430,26 @@ class VideoStreamer:
         stderr_thread = threading.Thread(target=read_stderr, daemon=True)
         stderr_thread.start()
     
-    def _warm_up_encoder(self) -> bool:
+    def _warm_up_encoder(self, timeout: float = 5.0) -> bool:
         """Send test frames to verify encoder works before declaring success"""
         try:
             # Create a black test frame
             test_frame = np.zeros((self.config.height, self.config.width, 3), dtype=np.uint8)
             frame_bytes = test_frame.tobytes()
             
-            # Send 3 test frames
-            for i in range(3):
+            start_time = time.time()
+            frames_sent = 0
+            
+            # Send test frames with timeout
+            while frames_sent < 3 and (time.time() - start_time) < timeout:
                 if self._ffmpeg_process and self._ffmpeg_process.stdin:
-                    self._ffmpeg_process.stdin.write(frame_bytes)
-                    self._ffmpeg_process.stdin.flush()
+                    try:
+                        self._ffmpeg_process.stdin.write(frame_bytes)
+                        self._ffmpeg_process.stdin.flush()
+                        frames_sent += 1
+                    except (BrokenPipeError, OSError):
+                        return False
+                    
                     time.sleep(0.05)
                     
                     # Check if process died
@@ -421,10 +465,18 @@ class VideoStreamer:
                             'error while opening encoder',
                             'error sending frames',
                             'conversion failed',
+                            'cannot load',
+                            'no nvenc capable',
+                            'mfx_load_plugin',
                         ]
                         for pattern in error_patterns:
                             if pattern in stderr_text:
                                 return False
+                else:
+                    return False
+            
+            if frames_sent < 3:
+                return False  # Timed out
             
             return True
         except Exception as e:
