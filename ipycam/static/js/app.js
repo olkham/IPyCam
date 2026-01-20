@@ -11,6 +11,12 @@ let nativeWebRTCAvailable = false;
 let nativePeerConnection = null;
 
 /**
+ * Video upload state management
+ */
+let videoUploadMode = false;
+let currentVideoFile = null;
+
+/**
  * PTZ Control Functions
  */
 let ptzMoveTimeout = null;
@@ -547,9 +553,237 @@ function loadConfig() {
             for (let opt of timestampPosSelect.options) {
                 opt.selected = opt.value === config.timestamp_position;
             }
+            
+            // Video upload mode
+            videoUploadMode = config.video_upload_mode || false;
+            const isVideoSource = config.source_type === 'video_file';
+            
+            // Show/hide video upload section
+            const uploadSection = document.getElementById('video-upload-section');
+            if (uploadSection) {
+                uploadSection.style.display = (isVideoSource && videoUploadMode) ? 'block' : 'none';
+            }
+            
+            // Update source info if video loaded
+            if (config.current_video) {
+                updateSourceInfo(config.current_video);
+            }
+            
+            // Show video error if any
+            if (config.video_error) {
+                showUploadError(config.video_error);
+            }
         })
         .catch(err => console.error('Failed to load config:', err));
 }
+
+/**
+ * Initialize video upload functionality
+ */
+function initVideoUpload() {
+    const uploadZone = document.getElementById('upload-zone');
+    const fileInput = document.getElementById('video-file-input');
+    
+    if (!uploadZone || !fileInput) return;
+    
+    // Click to browse
+    uploadZone.addEventListener('click', () => fileInput.click());
+    
+    // File selected via input
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            uploadVideoFile(e.target.files[0]);
+        }
+    });
+    
+    // Drag and drop
+    uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadZone.classList.add('drag-over');
+    });
+    
+    uploadZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('drag-over');
+    });
+    
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('drag-over');
+        
+        if (e.dataTransfer.files.length > 0) {
+            uploadVideoFile(e.dataTransfer.files[0]);
+        }
+    });
+}
+
+/**
+ * Upload a video file to the server
+ */
+function uploadVideoFile(file) {
+    // Validate file type
+    const validExtensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpeg', '.mpg', '.3gp'];
+    const ext = '.' + file.name.split('.').pop().toLowerCase();
+    
+    if (!validExtensions.includes(ext)) {
+        showUploadError(`Invalid file type: ${ext}. Supported formats: ${validExtensions.join(', ')}`);
+        return;
+    }
+    
+    // Hide previous messages
+    hideUploadMessages();
+    
+    // Show progress
+    const progressSection = document.getElementById('upload-progress');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    
+    progressSection.style.display = 'block';
+    progressFill.style.width = '0%';
+    progressText.textContent = 'Preparing upload...';
+    
+    // Create form data
+    const formData = new FormData();
+    formData.append('video', file, file.name);
+    
+    // Create XHR for progress tracking
+    const xhr = new XMLHttpRequest();
+    
+    xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            progressFill.style.width = percent + '%';
+            progressText.textContent = `Uploading: ${percent}% (${formatFileSize(e.loaded)} / ${formatFileSize(e.total)})`;
+        }
+    });
+    
+    xhr.addEventListener('load', () => {
+        progressSection.style.display = 'none';
+        
+        if (xhr.status === 200) {
+            try {
+                const response = JSON.parse(xhr.responseText);
+                if (response.success) {
+                    showUploadSuccess(`Video uploaded: ${response.filename}`);
+                    updateSourceInfo(response.filename);
+                    currentVideoFile = response.filename;
+                } else {
+                    showUploadError(response.error || 'Upload failed');
+                }
+            } catch (e) {
+                showUploadError('Invalid server response');
+            }
+        } else {
+            try {
+                const response = JSON.parse(xhr.responseText);
+                showUploadError(response.error || `Upload failed (${xhr.status})`);
+            } catch (e) {
+                showUploadError(`Upload failed with status ${xhr.status}`);
+            }
+        }
+    });
+    
+    xhr.addEventListener('error', () => {
+        progressSection.style.display = 'none';
+        showUploadError('Network error - upload failed');
+    });
+    
+    xhr.addEventListener('abort', () => {
+        progressSection.style.display = 'none';
+        showUploadError('Upload cancelled');
+    });
+    
+    xhr.open('POST', '/api/video/upload');
+    xhr.send(formData);
+}
+
+/**
+ * Format file size for display
+ */
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+/**
+ * Show upload error message
+ */
+function showUploadError(message) {
+    hideUploadMessages();
+    const errorEl = document.getElementById('upload-error');
+    if (errorEl) {
+        errorEl.textContent = '⚠️ ' + message;
+        errorEl.style.display = 'block';
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            errorEl.style.display = 'none';
+        }, 10000);
+    }
+}
+
+/**
+ * Show upload success message
+ */
+function showUploadSuccess(message) {
+    hideUploadMessages();
+    const successEl = document.getElementById('upload-success');
+    if (successEl) {
+        successEl.textContent = '✓ ' + message;
+        successEl.style.display = 'block';
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+            successEl.style.display = 'none';
+        }, 5000);
+    }
+}
+
+/**
+ * Hide all upload messages
+ */
+function hideUploadMessages() {
+    const errorEl = document.getElementById('upload-error');
+    const successEl = document.getElementById('upload-success');
+    if (errorEl) errorEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
+}
+
+/**
+ * Update source info display
+ */
+function updateSourceInfo(filename) {
+    const sourceNameEl = document.getElementById('source-name');
+    if (sourceNameEl) {
+        sourceNameEl.textContent = filename;
+        sourceNameEl.title = filename;
+    }
+}
+
+/**
+ * Check video status periodically when in video upload mode
+ */
+function checkVideoStatus() {
+    if (!videoUploadMode) return;
+    
+    fetch('/api/video/status')
+        .then(r => r.json())
+        .then(status => {
+            // Update source info
+            if (status.current_video) {
+                updateSourceInfo(status.current_video);
+            }
+            
+            // Show error if any (but don't spam if we already showed it)
+            if (status.video_error && status.video_error !== lastVideoError) {
+                showUploadError(status.video_error);
+                lastVideoError = status.video_error;
+            }
+        })
+        .catch(() => {});
+}
+
+let lastVideoError = null;
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
@@ -565,4 +799,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Load PTZ status
     updatePtzStatus();
+    
+    // Initialize video upload functionality
+    initVideoUpload();
+    
+    // Check video status periodically (for video upload mode)
+    setInterval(checkVideoStatus, 3000);
 });

@@ -27,6 +27,10 @@ def infer_source_type(source_arg: str) -> tuple[str, str]:
     Returns:
         tuple of (source_type, source_info)
     """
+    # Special case: 'video' without a file path means video upload mode
+    if source_arg.lower() == 'video':
+        return ("video_file", "Waiting for upload...")
+    
     # Try to parse as integer (webcam index)
     try:
         index = int(source_arg)
@@ -164,7 +168,75 @@ Examples:
     print(f"Snapshot URL: http://{config.local_ip}:{config.onvif_port}/{config.snapshot_url}")
     print("Press Ctrl+C to stop\n")
     
-    # Open camera source
+    # Check if this is video upload mode (--source video without a file)
+    is_video_upload_mode = args.source.lower() == 'video'
+    
+    if is_video_upload_mode:
+        # Video upload mode - no source file, wait for upload via web UI
+        print("Video upload mode - no video file specified")
+        print("Upload a video file via the web UI to start streaming\n")
+        camera.set_video_upload_mode(True)
+        
+        try:
+            # Main loop that handles video switching
+            while camera.is_running:
+                video_path = camera.get_current_video_path()
+                
+                if video_path and os.path.isfile(video_path):
+                    # We have a video file to play
+                    print(f"Opening video source: {video_path}")
+                    cap = cv2.VideoCapture(video_path)
+                    
+                    if not cap.isOpened():
+                        print(f"Error: Could not open video: {video_path}")
+                        camera.notify_video_error(f"Could not open video: {os.path.basename(video_path)}")
+                        import time
+                        time.sleep(0.5)
+                        continue
+                    
+                    # Update config with video info
+                    config.source_info = os.path.basename(video_path)
+                    camera.notify_video_loaded(video_path)
+                    
+                    # Stream video frames
+                    while camera.is_running and camera.get_current_video_path() == video_path:
+                        ret, frame = cap.read()
+                        if not ret:
+                            # Loop the video
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            continue
+                        camera.stream(frame)
+                    
+                    cap.release()
+                    print(f"Video source closed: {video_path}")
+                else:
+                    # No video yet, generate a placeholder frame
+                    import numpy as np
+                    placeholder = np.zeros((config.main_height, config.main_width, 3), dtype=np.uint8)
+                    # Dark blue background
+                    placeholder[:] = (30, 20, 10)
+                    # Add text
+                    text = "Upload a video to start"
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 1.5
+                    thickness = 2
+                    (text_w, text_h), _ = cv2.getTextSize(text, font, font_scale, thickness)
+                    x = (config.main_width - text_w) // 2
+                    y = (config.main_height + text_h) // 2
+                    cv2.putText(placeholder, text, (x, y), font, font_scale, (100, 100, 100), thickness)
+                    
+                    camera.stream(placeholder)
+                    import time
+                    time.sleep(1.0 / config.main_fps)
+                    
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+        finally:
+            camera.stop()
+        
+        return 0
+    
+    # Standard mode - open camera source
     # Try to parse as int (device index), otherwise treat as path/URL
     try:
         camera_source = int(args.source)
@@ -190,6 +262,11 @@ Examples:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.main_height)
         cap.set(cv2.CAP_PROP_FPS, config.main_fps)
     
+    # Store initial video path if it's a video file
+    if source_type == "video_file" and os.path.isfile(args.source):
+        camera.set_video_upload_mode(True)
+        camera.set_current_video_path(os.path.abspath(args.source))
+    
     if not cap.isOpened():
         print(f"Error: Could not open camera source: {camera_source}")
         camera.stop()
@@ -197,6 +274,29 @@ Examples:
     
     try:
         while camera.is_running:
+            # Check if video source changed (for video file mode)
+            if source_type == "video_file":
+                new_video = camera.get_current_video_path()
+                current_source = os.path.abspath(camera_source) if isinstance(camera_source, str) else None
+                
+                if new_video and new_video != current_source:
+                    # Video source changed - switch to new video
+                    print(f"Switching to new video: {new_video}")
+                    cap.release()
+                    cap = cv2.VideoCapture(new_video)
+                    
+                    if not cap.isOpened():
+                        print(f"Error: Could not open new video: {new_video}")
+                        camera.notify_video_error(f"Could not open video: {os.path.basename(new_video)}")
+                        # Revert to previous video
+                        if current_source and os.path.isfile(current_source):
+                            cap = cv2.VideoCapture(current_source)
+                        continue
+                    
+                    camera_source = new_video
+                    config.source_info = os.path.basename(new_video)
+                    camera.notify_video_loaded(new_video)
+            
             ret, frame = cap.read()
 
             if not ret:

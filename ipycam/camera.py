@@ -86,6 +86,13 @@ class IPCamera:
         self._stream_start_time: Optional[float] = None
         self._last_fps = 0
         
+        # Video upload mode
+        self._video_upload_mode = False
+        self._current_video_path: Optional[str] = None
+        self._previous_video_path: Optional[str] = None
+        self._video_error: Optional[str] = None
+        self._video_lock = threading.Lock()
+        
     def start(self) -> bool:
         """Start the IP camera (ONVIF, Web UI, and streaming)"""
         print(f"Starting IP Camera: {self.config.name}")
@@ -401,6 +408,93 @@ class IPCamera:
     @property
     def stats(self) -> Optional[StreamStats]:
         return self.streamer.stats if self.streamer else None
+    
+    # Video upload mode methods
+    def set_video_upload_mode(self, enabled: bool):
+        """Enable or disable video upload mode"""
+        self._video_upload_mode = enabled
+    
+    @property
+    def video_upload_mode(self) -> bool:
+        """Check if video upload mode is enabled"""
+        return self._video_upload_mode
+    
+    def get_current_video_path(self) -> Optional[str]:
+        """Get the current video file path"""
+        with self._video_lock:
+            return self._current_video_path
+    
+    def set_current_video_path(self, path: Optional[str]):
+        """Set the current video file path"""
+        with self._video_lock:
+            if self._current_video_path:
+                self._previous_video_path = self._current_video_path
+            self._current_video_path = path
+            self._video_error = None
+    
+    def get_previous_video_path(self) -> Optional[str]:
+        """Get the previous video file path"""
+        with self._video_lock:
+            return self._previous_video_path
+    
+    def notify_video_loaded(self, path: str):
+        """Notify that a video was successfully loaded - cleanup old videos"""
+        with self._video_lock:
+            self._video_error = None
+            self.config.source_info = os.path.basename(path)
+        
+        # Clean up old videos in the videos folder
+        self._cleanup_old_videos(path)
+    
+    def notify_video_error(self, error: str):
+        """Notify that a video failed to load"""
+        with self._video_lock:
+            self._video_error = error
+            # Revert to previous video if available
+            if self._previous_video_path:
+                self._current_video_path = self._previous_video_path
+                self._previous_video_path = None
+    
+    def get_video_error(self) -> Optional[str]:
+        """Get the last video error"""
+        with self._video_lock:
+            return self._video_error
+    
+    def clear_video_error(self):
+        """Clear the video error"""
+        with self._video_lock:
+            self._video_error = None
+    
+    def _cleanup_old_videos(self, current_path: str):
+        """Remove old videos from the videos folder, keeping only the current one"""
+        try:
+            videos_dir = os.path.join(os.path.dirname(__file__), '..', 'videos')
+            videos_dir = os.path.abspath(videos_dir)
+            
+            if not os.path.isdir(videos_dir):
+                return
+            
+            current_path = os.path.abspath(current_path)
+            video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpeg', '.mpg', '.3gp'}
+            
+            for filename in os.listdir(videos_dir):
+                filepath = os.path.join(videos_dir, filename)
+                _, ext = os.path.splitext(filename)
+                
+                # Skip non-video files and the current video
+                if ext.lower() not in video_extensions:
+                    continue
+                if os.path.abspath(filepath) == current_path:
+                    continue
+                
+                try:
+                    os.remove(filepath)
+                    print(f"  Cleaned up old video: {filename}")
+                except Exception as e:
+                    print(f"  Warning: Could not remove old video {filename}: {e}")
+                    
+        except Exception as e:
+            print(f"  Warning: Video cleanup failed: {e}")
     
     def get_web_ui_html(self) -> str:
         """Load and render the web UI HTML from template"""

@@ -480,3 +480,93 @@ select:focus {
     color: #00ff88;
     text-decoration: underline;
 }
+
+/* Video Upload Section */
+.video-upload-section {
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+}
+
+.upload-zone {
+    border: 2px dashed #0f3460;
+    border-radius: 10px;
+    padding: 30px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    background: rgba(15, 52, 96, 0.3);
+}
+
+.upload-zone:hover {
+    border-color: #00d4ff;
+    background: rgba(0, 212, 255, 0.1);
+}
+
+.upload-zone.drag-over {
+    border-color: #00ff88;
+    background: rgba(0, 255, 136, 0.1);
+    transform: scale(1.02);
+}
+
+.upload-icon {
+    font-size: 40px;
+    margin-bottom: 10px;
+}
+
+.upload-text {
+    font-size: 14px;
+    color: #fff;
+    margin-bottom: 5px;
+}
+
+.upload-hint {
+    font-size: 11px;
+    color: #888;
+}
+
+.upload-progress {
+    margin-top: 15px;
+}
+
+.progress-bar {
+    height: 8px;
+    background: #0f3460;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00d4ff, #00ff88);
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #888;
+    text-align: center;
+}
+
+.upload-error {
+    margin-top: 15px;
+    padding: 10px 15px;
+    background: rgba(233, 69, 96, 0.2);
+    border: 1px solid #e94560;
+    border-radius: 6px;
+    color: #ff6b6b;
+    font-size: 13px;
+}
+
+.upload-success {
+    margin-top: 15px;
+    padding: 10px 15px;
+    background: rgba(0, 255, 136, 0.2);
+    border: 1px solid #00ff88;
+    border-radius: 6px;
+    color: #00ff88;
+    font-size: 13px;
+}

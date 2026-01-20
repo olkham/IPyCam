@@ -70,8 +70,27 @@
                     <div class="source-icon" id="source-icon">{{source_icon}}</div>
                     <div class="source-details">
                         <div class="source-type">{{source_type_label}}</div>
-                        <div class="source-name" title="{{source_info}}">{{source_info}}</div>
+                        <div class="source-name" title="{{source_info}}" id="source-name">{{source_info}}</div>
                     </div>
+                </div>
+                
+                <!-- Video Upload Section (shown only for video_file source type) -->
+                <div id="video-upload-section" class="video-upload-section" style="display: none;">
+                    <h2>Upload Video</h2>
+                    <div class="upload-zone" id="upload-zone">
+                        <div class="upload-icon">📁</div>
+                        <div class="upload-text">Drop video file here or click to browse</div>
+                        <div class="upload-hint">Supported: MP4, AVI, MKV, MOV, WebM</div>
+                        <input type="file" id="video-file-input" accept=".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.mpeg,.mpg,.3gp" style="display: none;">
+                    </div>
+                    <div id="upload-progress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="progress-text" id="progress-text">Uploading...</div>
+                    </div>
+                    <div id="upload-error" class="upload-error" style="display: none;"></div>
+                    <div id="upload-success" class="upload-success" style="display: none;"></div>
                 </div>
                 
                 <h2>Stream URLs</h2>

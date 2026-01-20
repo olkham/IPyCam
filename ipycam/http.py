@@ -2,6 +2,7 @@
 """HTTP handler for ONVIF and Web UI"""
 
 import os
+import re
 import json
 import logging
 import http.server
@@ -38,6 +39,8 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.serve_stats()
         elif path == '/api/ptz':
             self.serve_ptz_status()
+        elif path == '/api/video/status':
+            self.serve_video_status()
         elif path == f'/{self.camera.config.snapshot_url}':
             self.serve_snapshot()
         elif path == f'/{self.camera.config.mjpeg_url}':
@@ -60,6 +63,8 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.handle_webrtc_offer()
         elif path == '/api/webrtc/close':
             self.handle_webrtc_close()
+        elif path == '/api/video/upload':
+            self.handle_video_upload()
         else:
             self.send_error(404)
     
@@ -167,6 +172,10 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         # Native WebRTC URL (signaling endpoint)
         config_dict['webrtc_native_url'] = f"http://{self.camera.config.local_ip}:{self.camera.config.onvif_port}/api/webrtc/offer"
         config_dict['webrtc_native_available'] = self.camera.webrtc_streamer is not None
+        # Video upload mode info
+        config_dict['video_upload_mode'] = self.camera.video_upload_mode
+        config_dict['current_video'] = os.path.basename(self.camera.get_current_video_path()) if self.camera.get_current_video_path() else None
+        config_dict['video_error'] = self.camera.get_video_error()
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -456,6 +465,158 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(response)
             
         except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+
+    def serve_video_status(self):
+        """Serve video upload mode status as JSON"""
+        status = {
+            'video_upload_mode': self.camera.video_upload_mode,
+            'current_video': os.path.basename(self.camera.get_current_video_path()) if self.camera.get_current_video_path() else None,
+            'current_video_path': self.camera.get_current_video_path(),
+            'video_error': self.camera.get_video_error(),
+            'source_type': self.camera.config.source_type,
+            'source_info': self.camera.config.source_info,
+        }
+        
+        response = json.dumps(status).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+    def handle_video_upload(self):
+        """Handle video file upload"""
+        if not self.camera.video_upload_mode:
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'error': 'Video upload mode is not enabled. Start with --source video'
+            }).encode('utf-8'))
+            return
+        
+        try:
+            # Parse multipart form data
+            content_type = self.headers.get('Content-Type', '')
+            if not content_type.startswith('multipart/form-data'):
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': 'Expected multipart/form-data'
+                }).encode('utf-8'))
+                return
+            
+            # Extract boundary
+            boundary_match = re.search(r'boundary=(.+?)(?:$|;|\s)', content_type)
+            if not boundary_match:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': 'Missing boundary in Content-Type'
+                }).encode('utf-8'))
+                return
+            
+            boundary = boundary_match.group(1).strip('"')
+            content_length = int(self.headers.get('Content-Length', 0))
+            
+            # Read the entire body
+            body = self.rfile.read(content_length)
+            
+            # Parse multipart data
+            boundary_bytes = ('--' + boundary).encode('utf-8')
+            parts = body.split(boundary_bytes)
+            
+            video_data = None
+            filename = None
+            
+            for part in parts:
+                if not part or part == b'--' or part == b'--\r\n':
+                    continue
+                
+                # Split headers from content
+                if b'\r\n\r\n' in part:
+                    headers_section, content = part.split(b'\r\n\r\n', 1)
+                    headers_text = headers_section.decode('utf-8', errors='ignore')
+                    
+                    # Check if this is the file part
+                    if 'filename=' in headers_text:
+                        # Extract filename
+                        filename_match = re.search(r'filename="?([^";\r\n]+)"?', headers_text)
+                        if filename_match:
+                            filename = filename_match.group(1).strip()
+                            # Remove trailing boundary markers and whitespace
+                            if content.endswith(b'\r\n'):
+                                content = content[:-2]
+                            video_data = content
+                            break
+            
+            if not video_data or not filename:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': 'No video file found in upload'
+                }).encode('utf-8'))
+                return
+            
+            # Validate file extension
+            video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpeg', '.mpg', '.3gp'}
+            _, ext = os.path.splitext(filename)
+            if ext.lower() not in video_extensions:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': f'Invalid video format: {ext}. Supported: {", ".join(video_extensions)}'
+                }).encode('utf-8'))
+                return
+            
+            # Create videos directory if it doesn't exist
+            videos_dir = os.path.join(os.path.dirname(__file__), '..', 'videos')
+            videos_dir = os.path.abspath(videos_dir)
+            os.makedirs(videos_dir, exist_ok=True)
+            
+            # Generate unique filename to avoid conflicts
+            import time
+            timestamp = int(time.time())
+            safe_filename = re.sub(r'[^\w\-_\.]', '_', filename)
+            final_filename = f"{timestamp}_{safe_filename}"
+            filepath = os.path.join(videos_dir, final_filename)
+            
+            # Save the video file
+            with open(filepath, 'wb') as f:
+                f.write(video_data)
+            
+            print(f"  Video uploaded: {final_filename} ({len(video_data)} bytes)")
+            
+            # Set the new video path - the main loop will pick it up
+            previous_video = self.camera.get_current_video_path()
+            self.camera.set_current_video_path(filepath)
+            
+            response = json.dumps({
+                'success': True,
+                'filename': final_filename,
+                'size': len(video_data),
+                'path': filepath,
+                'previous_video': os.path.basename(previous_video) if previous_video else None
+            }).encode('utf-8')
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+            
+        except Exception as e:
+            print(f"Video upload error: {e}")
+            import traceback
+            traceback.print_exc()
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
