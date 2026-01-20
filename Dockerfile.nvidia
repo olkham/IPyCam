@@ -1,0 +1,67 @@
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+# Install Python and system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install FFmpeg with NVENC support
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set python3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Set working directory
+WORKDIR /app
+
+# Download go2rtc binary
+RUN wget -q https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64 -O /app/go2rtc \
+    && chmod +x /app/go2rtc
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Install the package
+RUN pip install --no-cache-dir -e .
+
+# Create videos directory for uploads
+RUN mkdir -p /app/videos
+
+# Copy and setup entrypoint
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Expose ports
+EXPOSE 8080
+EXPOSE 3702/udp
+EXPOSE 1984
+EXPOSE 8554
+EXPOSE 1935
+EXPOSE 8555/udp
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
+
+# Default command - start in video upload mode
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["--source", "video"]
