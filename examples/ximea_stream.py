@@ -19,16 +19,19 @@ def main():
 
     if cap.connect():
         cap.start_async()
+        # cap.enable_auto_exposure(True)
         print("Ximea connected successfully.")
         print(f"Exposure: {cap.get_exposure()}")
         print(f"Gain: {cap.get_gain()}")
         print(f"Frame size: {cap.get_frame_size()}")
     
-
-    for _ in range(10):
+    wait_for_frame = True
+    while wait_for_frame:
         ret, frame = cap.read()
-        if ret or frame is not None:
+        if frame is not None:
             print(f"Captured frame of shape: {frame.shape}")
+            wait_for_frame = False
+            cap.enable_auto_exposure(True)
             # cv2.imshow("Ximea", frame) # type: ignore
             # if cv2.waitKey(1) & 0xFF == ord('q'):
                 # break
