@@ -174,7 +174,11 @@ if AIORTC_AVAILABLE:
                 frame_data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
             
             # Convert BGR (OpenCV) to RGB for av/aiortc
-            if frame_data.shape[2] == 3:
+            # Handle grayscale images by converting to RGB
+            if len(frame_data.shape) == 2:
+                # Grayscale image - convert to RGB by stacking
+                frame_rgb = np.stack([frame_data] * 3, axis=-1)
+            elif frame_data.shape[2] == 3:
                 frame_rgb = frame_data[:, :, ::-1]  # BGR to RGB
             else:
                 frame_rgb = frame_data

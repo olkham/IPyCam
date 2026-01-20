@@ -12,6 +12,41 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Check if python3-venv is available
+echo "Checking for python3-venv..."
+if ! python3 -c "import ensurepip" &> /dev/null; then
+    echo "python3-venv is not installed"
+    PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    echo
+    read -p "Would you like to install python${PYTHON_VERSION}-venv? (Y/N): " install_venv
+    if [ "${install_venv,,}" = "y" ]; then
+        echo "Installing python${PYTHON_VERSION}-venv..."
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y python${PYTHON_VERSION}-venv
+        elif command -v dnf &> /dev/null; then
+            sudo dnf install -y python${PYTHON_VERSION}-venv
+        elif command -v yum &> /dev/null; then
+            sudo yum install -y python${PYTHON_VERSION}-venv
+        elif command -v pacman &> /dev/null; then
+            sudo pacman -S --noconfirm python
+        else
+            echo "ERROR: No supported package manager found"
+            echo "Please install python${PYTHON_VERSION}-venv manually"
+            exit 1
+        fi
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Failed to install python${PYTHON_VERSION}-venv"
+            exit 1
+        fi
+        echo "python${PYTHON_VERSION}-venv has been installed"
+    else
+        echo "ERROR: python3-venv is required to continue"
+        echo "Please install it manually: sudo apt install python${PYTHON_VERSION}-venv"
+        exit 1
+    fi
+fi
+echo
+
 echo "[1/4] Creating virtual environment..."
 if [ -d ".venv" ]; then
     echo "Virtual environment already exists, skipping creation"
