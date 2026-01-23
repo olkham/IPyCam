@@ -215,6 +215,38 @@ ipycam/
 └── static/           # Web UI and SOAP templates
 ```
 
+## Development
+
+### Running Tests
+
+IPyCam includes a comprehensive test suite using pytest. To run the tests:
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run with coverage report
+pytest --cov=ipycam --cov-report=term-missing
+
+# Run specific test file
+pytest tests/test_config.py
+pytest tests/test_ptz.py
+pytest tests/test_mjpeg.py
+pytest tests/test_onvif.py
+```
+
+The test suite covers:
+- **CameraConfig**: Configuration serialization, URL generation, hardware acceleration settings
+- **PTZController**: Positioning, presets, hardware handler callbacks, frame transforms
+- **MJPEGStreamer**: Client management, frame streaming, statistics
+- **ONVIFService**: SOAP response generation, PTZ command parsing, device info
+
 ## Troubleshooting
 
 ### Camera freezes after a few frames

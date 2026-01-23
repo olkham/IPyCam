@@ -34,6 +34,11 @@ ipycam = "ipycam.__main__:main"
 camera360 = [
     "framesource @ git+https://github.com/olkham/FrameSource.git",
 ]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -48,3 +53,12 @@ version = {attr = "ipycam.__version__.__version__"}
 
 [tool.setuptools.package-data]
 ipycam = ["static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
