@@ -21,10 +21,10 @@
   "sub_stream_name": "video_sub",
   "mjpeg_url": "stream.mjpeg",
   "snapshot_url": "snapshot.jpg",
-  "hw_accel": "auto",
+  "hw_accel": "nvenc",
   "show_timestamp": true,
   "timestamp_format": "%Y-%m-%d %H:%M:%S",
   "timestamp_position": "bottom-left",
-  "source_type": "camera",
-  "source_info": "Camera Index 0"
+  "source_type": "video_file",
+  "source_info": "1768840346_video.mp4"
 }

@@ -1,0 +1,84 @@
+# IPyCam Docker Compose
+# 
+# Usage:
+#   CPU only:     docker compose up -d
+#   NVIDIA GPU:   docker compose --profile nvidia up -d
+#   Intel QSV:    docker compose --profile intel up -d
+
+services:
+  # ============================================
+  # CPU-only version (default)
+  # ============================================
+  ipycam:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ipycam
+    profiles: ["cpu"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=UTC
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./videos:/app/videos
+      - ./camera_config.json:/app/camera_config.json:rw
+    # Ports (via host network):
+    # 8080 - Web UI / ONVIF
+    # 3702/udp - WS-Discovery
+    # 1984 - go2rtc API
+    # 8554 - RTSP
+    # 1935 - RTMP
+    # 8555 - WebRTC
+
+  # ============================================
+  # NVIDIA GPU version
+  # Requires: nvidia-container-toolkit
+  # Usage: docker compose --profile nvidia up -d
+  # ============================================
+  ipycam-nvidia:
+    build:
+      context: .
+      dockerfile: Dockerfile.nvidia
+    container_name: ipycam-nvidia
+    restart: unless-stopped
+    network_mode: host
+    profiles: ["nvidia"]
+    environment:
+      - TZ=UTC
+      - PYTHONUNBUFFERED=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]
+    volumes:
+      - ./videos:/app/videos
+      - ./camera_config.json:/app/camera_config.json:rw
+
+  # ============================================
+  # Intel QSV version (with CPU fallback)
+  # Requires: Intel GPU with VA-API support
+  # Usage: docker compose --profile intel up -d
+  # ============================================
+  ipycam-intel:
+    build:
+      context: .
+      dockerfile: Dockerfile.intel
+    container_name: ipycam-intel
+    restart: unless-stopped
+    network_mode: host
+    profiles: ["intel"]
+    environment:
+      - TZ=UTC
+      - PYTHONUNBUFFERED=1
+      - LIBVA_DRIVER_NAME=iHD
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - ./videos:/app/videos
+      - ./camera_config.json:/app/camera_config.json:rw
