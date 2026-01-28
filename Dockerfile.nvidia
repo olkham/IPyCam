@@ -37,10 +37,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
+
+# Copy all files
 COPY . .
 
-# Install the package
-RUN pip install --no-cache-dir -e .
+# Install the package (non-editable)
+RUN pip install --no-cache-dir .
 
 # Create videos directory for uploads
 RUN mkdir -p /app/videos
