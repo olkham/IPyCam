@@ -185,7 +185,11 @@ Examples:
                 if video_path and os.path.isfile(video_path):
                     # We have a video file to play
                     print(f"Opening video source: {video_path}")
-                    cap = cv2.VideoCapture(video_path)
+                    # Prefer V4L2 on Linux for consistent FPS control
+                    if platform.system().lower() == "linux":
+                        cap = cv2.VideoCapture(video_path, cv2.CAP_V4L2)
+                    else:
+                        cap = cv2.VideoCapture(video_path, cv2.CAP_DSHOW)
                     
                     if not cap.isOpened():
                         print(f"Error: Could not open video: {video_path}")
