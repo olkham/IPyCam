@@ -185,11 +185,8 @@ Examples:
                 if video_path and os.path.isfile(video_path):
                     # We have a video file to play
                     print(f"Opening video source: {video_path}")
-                    # Prefer V4L2 on Linux for consistent FPS control
-                    if platform.system().lower() == "linux":
-                        cap = cv2.VideoCapture(video_path, cv2.CAP_V4L2)
-                    else:
-                        cap = cv2.VideoCapture(video_path, cv2.CAP_DSHOW)
+                    # Use auto backend for file paths (V4L2/DSHOW are for device indices only)
+                    cap = cv2.VideoCapture(video_path)
                     
                     if not cap.isOpened():
                         print(f"Error: Could not open video: {video_path}")
@@ -248,11 +245,13 @@ Examples:
         camera_source = args.source
     
     print(f"Opening camera source: {camera_source}")
-    # Prefer V4L2 on Linux for consistent FPS control
-    if isinstance(camera_source, int) and platform.system().lower() == "linux":
+    # Use auto backend for file paths; use platform backend for device indices/URLs
+    if isinstance(camera_source, str) and os.path.isfile(camera_source):
+        cap = cv2.VideoCapture(camera_source)
+    elif platform.system().lower() == "linux":
         cap = cv2.VideoCapture(camera_source, cv2.CAP_V4L2)
     else:
-        cap = cv2.VideoCapture(camera_source)
+        cap = cv2.VideoCapture(camera_source, cv2.CAP_DSHOW)
     
     # Set resolution if using webcam (device index)
     if isinstance(camera_source, int):
