@@ -86,6 +86,7 @@ dmypy.json
 # Local config
 # camera_config.json
 ptz_presets.json
+pypi_steps.md
 
 # video files
 *.mp4
