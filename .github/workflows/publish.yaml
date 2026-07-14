@@ -1,9 +1,12 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:  # Allow manual trigger
+  push:
+    tags:
+      - "v*"
+  # Manual runs must be dispatched from a tag ref (e.g. v0.3.0), otherwise
+  # setuptools_scm produces a dev version that PyPI rejects.
+  workflow_dispatch:
 
 jobs:
   build:
