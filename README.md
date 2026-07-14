@@ -83,12 +83,11 @@ Without go2rtc, IPyCam will automatically fall back to native Python streaming.
 
 For the `360_ptz.py` example with equirectangular projection:
 ```bash
-pip install "ipycam[camera360] @ git+https://github.com/olkham/IPyCam.git"
+pip install "ipycam[camera360]"
 ```
 or install FrameSource separately:
 ```bash
-pip install git+https://github.com/olkham/IPyCam.git
-pip install git+https://github.com/olkham/FrameSource.git
+pip install framesource
 ```
 
 ### Basic Usage
