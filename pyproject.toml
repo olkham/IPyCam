@@ -23,14 +23,16 @@ classifiers = [
 dependencies = [
     "numpy>=1.24.0",
     "opencv-python>=4.8.0",
-    "aiohttp>=3.9.0",
-    "aiortc>=1.14.0",
 ]
 
 [project.scripts]
 ipycam = "ipycam.__main__:main"
 
 [project.optional-dependencies]
+webrtc = [
+    "aiortc>=1.14.0",
+    "aiohttp>=3.9.0",
+]
 camera360 = [
     "framesource>=0.3.0",
 ]
@@ -38,6 +40,8 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0,<1.17.0",  # newer mypy dropped support for python_version = 3.8
 ]
 
 [build-system]
@@ -52,7 +56,7 @@ include-package-data = true
 version = {attr = "ipycam.__version__.__version__"}
 
 [tool.setuptools.package-data]
-ipycam = ["static/**/*"]
+ipycam = ["static/**/*", "*.yaml", "go2rtc.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -62,3 +66,24 @@ addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+# Starter rule set: keep it useful, not noisy, for a codebase that hasn't been linted before.
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # line-too-long: many existing lines exceed the limit; revisit once cleaned up
+    "B008",  # function calls in default args are used intentionally in a few places
+    "W291",  # trailing-whitespace: widespread pre-existing style issue, not a bug
+    "W293",  # blank-line-with-whitespace: same as above, dominates the error count otherwise
+]
+
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = false
+no_implicit_optional = false

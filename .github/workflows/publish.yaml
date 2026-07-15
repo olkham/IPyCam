@@ -4,8 +4,10 @@ on:
   push:
     tags:
       - "v*"
-  # Manual runs must be dispatched from a tag ref (e.g. v0.3.0), otherwise
-  # setuptools_scm produces a dev version that PyPI rejects.
+  # Manual runs are also supported. The version published comes from the
+  # static ipycam.__version__.__version__ attribute, so make sure it has
+  # been bumped before dispatching manually (PyPI rejects re-uploading an
+  # already-published version).
   workflow_dispatch:
 
 jobs:

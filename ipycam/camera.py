@@ -22,17 +22,20 @@ Usage:
     camera.stop()
 """
 
+import logging
 import os
 import time
 import threading
 import socketserver
 from datetime import datetime
+from html import escape as html_escape
 import numpy as np
 import cv2
 from typing import Optional
 
 from .__version__ import __version__
 from .config import CameraConfig
+from .framequeue import FrameQueue
 from .streamer import VideoStreamer, StreamStats
 from .onvif import ONVIFService
 from .http import IPCameraHTTPHandler
@@ -41,6 +44,9 @@ from .ptz import PTZController
 from .mjpeg import MJPEGStreamer, check_go2rtc_running, check_rtsp_port_available
 from .webrtc import NativeWebRTCStreamer, is_webrtc_available
 from .rtsp import NativeRTSPServer, is_native_rtsp_available
+from .recorder import VideoRecorder
+
+logger = logging.getLogger(__name__)
 
 
 class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -77,7 +83,24 @@ class IPCamera:
         
         self._http_server: Optional[socketserver.TCPServer] = None
         self._discovery: Optional[WSDiscoveryServer] = None
+
+        # Local disk recorder. Always constructed; its worker only runs while
+        # recording or maintaining a pre-record buffer. Frames are handed to it
+        # via a bounded drop-oldest queue on a worker thread (same fan-out
+        # pattern as MJPEG/RTSP), so a slow disk drops frames instead of
+        # stalling the capture loop.
+        self.recorder: Optional[VideoRecorder] = VideoRecorder(self.config)
+
+        # Native-RTSP fan-out: the per-frame sub-stream resize is moved OFF the
+        # capture thread onto this worker so stream() only enqueues.
+        self._rtsp_frame_queue: FrameQueue = FrameQueue(maxsize=2)
+        self._rtsp_worker: Optional[threading.Thread] = None
+        self._rtsp_worker_running = False
+
         self._last_frame: Optional[np.ndarray] = None
+        # Guards _last_frame: the capture thread writes it while the HTTP
+        # snapshot endpoint reads it from another thread.
+        self._last_frame_lock = threading.Lock()
         self._running = False
         self._restarting = False  # Flag to prevent loop exit during restart
         
@@ -95,53 +118,87 @@ class IPCamera:
         
     def start(self) -> bool:
         """Start the IP camera (ONVIF, Web UI, and streaming)"""
-        print(f"Starting IP Camera: {self.config.name}")
-        print(f"  Local IP: {self.config.local_ip}")
-        
+        logger.info(f"Starting IP Camera: {self.config.name}")
+        logger.info(f"  Local IP: {self.config.local_ip}")
+
         # Start WS-Discovery
         self._discovery = WSDiscoveryServer(self.onvif)
         self._discovery.start()
-        print(f"  WS-Discovery: listening on port 3702")
-        
+        logger.info(f"  WS-Discovery: listening on port 3702")
+
         # Start HTTP server (ONVIF + Web UI)
         IPCameraHTTPHandler.camera = self
         self._http_server = ReusableThreadingTCPServer(
-            ('', self.config.onvif_port), 
+            ('', self.config.onvif_port),
             IPCameraHTTPHandler
         )
         self._http_thread = threading.Thread(target=self._http_server.serve_forever, daemon=True)
         self._http_thread.start()
-        print(f"  ONVIF Service: {self.config.onvif_url}")
-        print(f"  Web UI: http://{self.config.local_ip}:{self.config.onvif_port}/")
+        logger.info(f"  ONVIF Service: {self.config.onvif_url}")
+        logger.info(f"  Web UI: http://{self.config.local_ip}:{self.config.onvif_port}/")
         
         # Always start the MJPEG streamer (available as alternative view even with go2rtc)
-        self.mjpeg_streamer = MJPEGStreamer(quality=80)
+        self.mjpeg_streamer = MJPEGStreamer(
+            quality=80,
+            sub_width=self.config.sub_width,
+            sub_height=self.config.sub_height,
+        )
         self.mjpeg_streamer.start()
         mjpeg_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/{self.config.mjpeg_url}"
         
-        # Check if go2rtc is running
+        # Detect go2rtc BEFORE attempting the RTMP push. Probing the API port
+        # (:1984) and RTSP port (:8554) up front means we never fire a doomed
+        # FFmpeg push at a non-existent RTMP listener: if go2rtc isn't there we
+        # go straight to the native RTSP/WebRTC fallback (faster and clearer).
         go2rtc_available = check_go2rtc_running(port=self.config.go2rtc_api_port)
         rtsp_available = check_rtsp_port_available(port=self.config.rtsp_port)
-        
+
         if go2rtc_available and rtsp_available:
-            # Use go2rtc for streaming (best option: RTSP + WebRTC + MJPEG)
+            # go2rtc is up: push to it (best option: RTSP + WebRTC + MJPEG).
+            # VideoStreamer now guarantees a CPU fallback, so a failing HW
+            # encoder no longer kills this path.
             self._use_mjpeg_fallback = False
             self._streaming_mode = 'go2rtc'
             stream_config = self.config.to_stream_config()
             self.streamer = VideoStreamer(stream_config)
-            
+
             if not self.streamer.start(self.config.main_stream_push_url, self.config.sub_stream_push_url):
-                print("  ⚠ Failed to start video streamer, trying native WebRTC fallback...")
+                logger.warning("  [WARN] Failed to start video streamer, trying native WebRTC fallback...")
                 self._try_native_webrtc_fallback(mjpeg_url)
             else:
-                print(f"  Main Stream: {self.config.main_stream_rtsp}")
-                print(f"  Sub Stream: {self.config.sub_stream_rtsp}")
-                print(f"  WebRTC: {self.config.webrtc_url}")
-                print(f"  MJPEG Stream: {mjpeg_url}")
+                logger.info(f"  Main Stream: {self.config.main_stream_rtsp}")
+                logger.info(f"  Sub Stream: {self.config.sub_stream_rtsp}")
+                logger.info(f"  WebRTC: {self.config.webrtc_url}")
+                logger.info(f"  MJPEG Stream: {mjpeg_url}")
         else:
-            # go2rtc not available - try native WebRTC as fallback
+            # go2rtc not (fully) detected - skip the doomed RTMP push entirely
+            # and go straight to the native fallback. Log the EXACT command to
+            # launch go2rtc with the packaged config so the user can fix it.
+            cfg_path = os.path.join(os.path.dirname(__file__), 'go2rtc.yaml')
+            if not go2rtc_available:
+                logger.warning(
+                    '  [WARN] go2rtc not detected on :%s - start it with: '
+                    'go2rtc --config "%s" '
+                    '(or IPyCam will use the native RTSP/WebRTC fallback)',
+                    self.config.go2rtc_api_port, cfg_path,
+                )
+            else:
+                logger.warning(
+                    '  [WARN] go2rtc API is up but its RTSP port :%s is not accepting '
+                    'connections - start it with: go2rtc --config "%s" '
+                    '(using native RTSP/WebRTC fallback meanwhile)',
+                    self.config.rtsp_port, cfg_path,
+                )
             self._try_native_webrtc_fallback(mjpeg_url)
-        
+
+        # Start the recorder worker (pre-record ring buffer) when recording is
+        # enabled in config. An explicit start_recording() can still start it
+        # on demand later even if this is disabled.
+        if self.recorder is not None and self.config.recording_enabled:
+            self.recorder.start()
+            logger.info("  Recording: enabled (pre-record %ss, path %s)",
+                        self.config.recording_pre_seconds, self.config.recording_path)
+
         self._running = True
         return True
     
@@ -173,17 +230,18 @@ class IPCamera:
                 
                 if self.rtsp_server.start():
                     rtsp_started = True
-                    print("  ✓ Native RTSP server started")
-                    print(f"    Main Stream: {self.config.main_stream_rtsp}")
-                    print(f"    Sub Stream: {self.config.sub_stream_rtsp}")
+                    self._start_rtsp_fanout()
+                    logger.info("  [OK] Native RTSP server started")
+                    logger.info(f"    Main Stream: {self.config.main_stream_rtsp}")
+                    logger.info(f"    Sub Stream: {self.config.sub_stream_rtsp}")
                 else:
-                    print("  ⚠ Failed to start native RTSP server")
+                    logger.warning("  [WARN] Failed to start native RTSP server")
                     self.rtsp_server = None
             except Exception as e:
-                print(f"  ⚠ Failed to start native RTSP server: {e}")
+                logger.warning(f"  [WARN] Failed to start native RTSP server: {e}")
                 self.rtsp_server = None
         else:
-            print("  ⚠ Native RTSP unavailable (FFmpeg not found)")
+            logger.warning("  [WARN] Native RTSP unavailable (FFmpeg not found)")
         
         # Try to start native WebRTC
         webrtc_started = False
@@ -197,37 +255,37 @@ class IPCamera:
                 if self.webrtc_streamer.start():
                     webrtc_started = True
                     webrtc_native_url = f"http://{self.config.local_ip}:{self.config.onvif_port}/api/webrtc/offer"
-                    print(f"  ✓ Native WebRTC started: {webrtc_native_url}")
+                    logger.info(f"  [OK] Native WebRTC started: {webrtc_native_url}")
                 else:
                     self.webrtc_streamer = None
             except Exception as e:
-                print(f"  ⚠ Failed to start native WebRTC: {e}")
+                logger.warning(f"  [WARN] Failed to start native WebRTC: {e}")
                 self.webrtc_streamer = None
-        
+
         # Determine streaming mode based on what's available
         if rtsp_started and webrtc_started:
             self._use_mjpeg_fallback = False
             self._streaming_mode = 'native_rtsp_webrtc'
-            print("  ⚠ go2rtc not detected - using native RTSP + WebRTC fallback")
+            logger.warning("  [WARN] go2rtc not detected - using native RTSP + WebRTC fallback")
         elif rtsp_started:
             self._use_mjpeg_fallback = False
             self._streaming_mode = 'native_rtsp'
-            print("  ⚠ go2rtc not detected - using native RTSP fallback")
-            print("  Note: Install aiortc for native WebRTC: pip install aiortc")
+            logger.warning("  [WARN] go2rtc not detected - using native RTSP fallback")
+            logger.warning("  Note: Install aiortc for native WebRTC: pip install aiortc")
         elif webrtc_started:
             self._use_mjpeg_fallback = False
             self._streaming_mode = 'native_webrtc'
-            print("  ⚠ go2rtc not detected - using native WebRTC fallback")
-            print("  Note: RTSP unavailable (FFmpeg not found)")
+            logger.warning("  [WARN] go2rtc not detected - using native WebRTC fallback")
+            logger.warning("  Note: RTSP unavailable (FFmpeg not found)")
         else:
             # Final fallback: MJPEG only
             self._use_mjpeg_fallback = True
             self._streaming_mode = 'mjpeg'
-            print("  ⚠ No RTSP/WebRTC available - using MJPEG-only fallback")
-            print("  Note: Install aiortc for native WebRTC: pip install aiortc")
-            print("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
-        
-        print(f"  MJPEG Stream: {mjpeg_url}")
+            logger.warning("  [WARN] No RTSP/WebRTC available - using MJPEG-only fallback")
+            logger.warning("  Note: Install aiortc for native WebRTC: pip install aiortc")
+            logger.warning("        Or start go2rtc for full functionality: go2rtc --config ipycam/go2rtc.yaml")
+
+        logger.info(f"  MJPEG Stream: {mjpeg_url}")
     
     def stop(self):
         """Stop all camera services"""
@@ -241,13 +299,19 @@ class IPCamera:
         
         if self.webrtc_streamer:
             self.webrtc_streamer.stop()
-        
+
         if self.rtsp_server:
+            self._stop_rtsp_fanout()
             self.rtsp_server.stop()
         
         if self.mjpeg_streamer:
             self.mjpeg_streamer.stop()
-        
+
+        # Finalise any active recording and JOIN the recorder worker (no thread
+        # leak, no truncated file).
+        if self.recorder:
+            self.recorder.stop()
+
         if self._discovery:
             self._discovery.stop()
         
@@ -255,49 +319,152 @@ class IPCamera:
             self._http_server.shutdown()
             self._http_server.server_close()
         
-        print("IP Camera stopped")
+        logger.info("IP Camera stopped")
     
     def stream(self, frame: np.ndarray) -> bool:
-        """Send a frame to the stream (applies PTZ transform, timestamp, and frame pacing)"""
+        """Send a frame to the stream (applies PTZ transform, display
+        transforms, timestamp, and frame pacing)"""
         # Apply PTZ transform first
         if self.ptz:
             frame = self.ptz.apply_ptz(frame)
-        
+
+        # Apply display transforms (rotate/flip/mirror) AFTER PTZ but BEFORE
+        # the timestamp overlay, so the timestamp is drawn readable and
+        # correctly positioned on the frame's final (post-transform)
+        # orientation instead of getting rotated/flipped itself.
+        frame = self._apply_display_transforms(frame)
+
         # Apply timestamp overlay last (always visible, not affected by PTZ)
         if self.config.show_timestamp:
             frame = self._draw_timestamp(frame)
         
-        self._last_frame = frame  # Keep for snapshots (already PTZ-adjusted + timestamp)
-        
-        # Send to MJPEG streamer only when clients are connected
+        # ---- OUTBOUND FRAME IMMUTABILITY CONTRACT ---------------------------
+        # Make ONE independent copy per iteration (already PTZ-adjusted +
+        # timestamp) and hand the SAME object to snapshots and to every async
+        # output queue.
+        #
+        # This copy is essential: the caller's `frame` is reused/mutated in
+        # place on the next iteration, so sharing that reference would let a
+        # consumer observe a torn frame.
+        #
+        # `outbound`, by contrast, is IMMUTABLE BY CONTRACT -- it is a fresh
+        # buffer each call and NO consumer may mutate it in place. Every
+        # consumer either only READS it (MJPEG imencode; go2rtc
+        # resize/cvtColor/tobytes; native-RTSP encoder tobytes + sub-stream
+        # resize) or takes its OWN copy (get_snapshot_frame; the WebRTC encoder,
+        # where av.VideoFrame.from_ndarray copies pixels into its own buffer).
+        # Because of this contract the downstream single-slot buffers store a
+        # REFERENCE to `outbound` instead of re-copying it (see
+        # SharedFrameBuffer.update and NativeRTSPServer.stream_frame), which is
+        # this step's whole point: one copy here, zero elsewhere.
+        #
+        # The next iteration allocates a new buffer and leaves this one stable
+        # for whatever is still reading it. Anyone adding a consumer that
+        # mutates the frame in place MUST copy first, or restore the defensive
+        # copy at that consumer, or this contract breaks.
+        # ---------------------------------------------------------------------
+        outbound = frame.copy()
+        with self._last_frame_lock:
+            self._last_frame = outbound
+
+        # Fan out with NON-BLOCKING enqueues only -- nothing below may block on
+        # encoding or socket/pipe I/O (that all happens on per-output workers).
+
+        # MJPEG: cheap enqueue into the encode worker (only when watched).
         if self.mjpeg_streamer and self.mjpeg_streamer.client_count > 0:
-            self.mjpeg_streamer.stream_frame(frame)
-        
-        # Send to native WebRTC streamer only if there are active connections
+            self.mjpeg_streamer.stream_frame(outbound)
+
+        # Native WebRTC: this `connection_count > 0` check is the SINGLE
+        # authoritative "is anyone watching?" gate for the WebRTC path. When no
+        # peer is connected we skip it entirely, so SharedFrameBuffer does zero
+        # work (no store, no copy) while WebRTC is idle. When a peer IS
+        # connected, stream_frame just stores a REFERENCE to the immutable
+        # outbound frame under a lock (no copy); the per-peer isolation happens
+        # in the encoder via av.VideoFrame.from_ndarray. Lock-guarded reference
+        # store => effectively non-blocking, safe to stay inline.
         if self.webrtc_streamer and self.webrtc_streamer.connection_count > 0:
-            self.webrtc_streamer.stream_frame(frame)
-        
-        # Send to native RTSP server if active (fallback mode)
+            self.webrtc_streamer.stream_frame(outbound)
+
+        # Native RTSP: enqueue once; the fan-out worker does the sub-stream
+        # resize and per-stream writes off the capture thread.
         if self.rtsp_server and self.rtsp_server.is_running:
-            # Send to main stream
-            self.rtsp_server.stream_frame(self.config.main_stream_name, frame)
-            # Send to sub stream (resized)
-            if self.config.sub_width != self.config.main_width or self.config.sub_height != self.config.main_height:
-                sub_frame = cv2.resize(frame, (self.config.sub_width, self.config.sub_height))
-                self.rtsp_server.stream_frame(self.config.sub_stream_name, sub_frame)
-            else:
-                self.rtsp_server.stream_frame(self.config.sub_stream_name, frame)
-        
-        # Send to go2rtc streamer if available (not in fallback mode)
+            self._rtsp_frame_queue.put(outbound)
+
+        # Recorder: enqueue the immutable outbound frame ONLY while recording or
+        # maintaining a pre-record buffer (wants_frames gates this to zero cost
+        # when idle). All encoding/disk I/O happens on the recorder worker; this
+        # is a non-blocking, drop-oldest enqueue that can never stall capture.
+        if self.recorder is not None and self.recorder.wants_frames:
+            self.recorder.submit(outbound)
+
+        # go2rtc: enqueue into the streamer's writer thread (non-blocking).
         result = True
         if not self._use_mjpeg_fallback and self.streamer:
-            result = self.streamer.stream(frame)
-        
+            result = self.streamer.stream(outbound)
+
         # Frame pacing - maintain target FPS
         self._pace_frame()
-        
+
         return result
-    
+
+    def _start_rtsp_fanout(self):
+        """Start the native-RTSP fan-out worker (resize + per-stream writes)."""
+        self._rtsp_frame_queue = FrameQueue(maxsize=self._rtsp_frame_queue.maxsize)
+        self._rtsp_worker_running = True
+        self._rtsp_worker = threading.Thread(
+            target=self._rtsp_fanout_loop,
+            name="rtsp-fanout-worker",
+            daemon=True,
+        )
+        self._rtsp_worker.start()
+
+    def _stop_rtsp_fanout(self):
+        """Signal and join the native-RTSP fan-out worker (with timeout)."""
+        self._rtsp_worker_running = False
+        self._rtsp_frame_queue.close()
+        worker = self._rtsp_worker
+        if worker and worker.is_alive():
+            worker.join(timeout=2.0)
+        self._rtsp_worker = None
+
+    def _rtsp_fanout_loop(self):
+        """Worker: forward frames to the native RTSP server's main/sub streams.
+
+        Does the per-frame sub-stream resize here instead of on the capture
+        thread. rtsp_server.stream_frame itself only does a locked single-slot
+        buffer copy, so this worker never blocks on encoding either.
+        """
+        while self._rtsp_worker_running:
+            frame = self._rtsp_frame_queue.get(timeout=0.5)
+            if frame is None:
+                continue
+            server = self.rtsp_server
+            if not server or not server.is_running:
+                continue
+            try:
+                server.stream_frame(self.config.main_stream_name, frame)
+                if (self.config.sub_width != self.config.main_width
+                        or self.config.sub_height != self.config.main_height):
+                    sub_frame = cv2.resize(frame, (self.config.sub_width, self.config.sub_height))
+                    server.stream_frame(self.config.sub_stream_name, sub_frame)
+                else:
+                    server.stream_frame(self.config.sub_stream_name, frame)
+            except Exception as e:
+                logger.error(f"RTSP fan-out error: {e}")
+
+    def get_snapshot_frame(self) -> Optional[np.ndarray]:
+        """Return a safe, independent copy of the latest frame for snapshots.
+
+        Thread-safe: the HTTP snapshot endpoint runs on a different thread from
+        the capture loop that calls stream(). Returns a fresh copy so the caller
+        can encode it without racing the capture thread, or None if no frame has
+        been streamed yet.
+        """
+        with self._last_frame_lock:
+            if self._last_frame is None:
+                return None
+            return self._last_frame.copy()
+
     def _pace_frame(self):
         """Handle frame pacing to maintain target FPS"""
         # Initialize or reset timing if FPS changed
@@ -316,6 +483,40 @@ class IPCamera:
         if sleep_time > 0:
             time.sleep(sleep_time)
     
+    def _apply_display_transforms(self, frame: np.ndarray) -> np.ndarray:
+        """Apply the configured rotation/flip/mirror display transforms.
+
+        Order: ROTATE first, then FLIP/MIRROR. Rotating first means flip and
+        mirror always act on the frame's final on-screen orientation (what
+        the viewer sees), matching how those two settings are described to
+        users, rather than on the sensor's native orientation.
+
+        flip (vertical) and mirror (horizontal) are collapsed into a single
+        cv2.flip call (flipCode -1) when both are active, instead of two
+        separate passes.
+
+        Fast path: when rotation == 0 and neither flip nor mirror is set (the
+        common case), this returns the SAME frame object unchanged -- no
+        copy, no cv2 call, just the attribute checks below.
+        """
+        cfg = self.config
+
+        if cfg.rotation == 90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        elif cfg.rotation == 180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif cfg.rotation == 270:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+        if cfg.flip and cfg.mirror:
+            frame = cv2.flip(frame, -1)  # both axes in one pass
+        elif cfg.flip:
+            frame = cv2.flip(frame, 0)   # vertical flip
+        elif cfg.mirror:
+            frame = cv2.flip(frame, 1)   # horizontal flip
+
+        return frame
+
     def _draw_timestamp(self, frame: np.ndarray) -> np.ndarray:
         """Draw timestamp overlay on frame"""
         timestamp = datetime.now().strftime(self.config.timestamp_format)
@@ -352,7 +553,7 @@ class IPCamera:
     
     def restart_stream(self) -> bool:
         """Restart the video streamer with current config"""
-        print("Restarting video stream...")
+        logger.info("Restarting video stream...")
         self._restarting = True
         
         try:
@@ -371,10 +572,10 @@ class IPCamera:
             self.streamer = VideoStreamer(stream_config)
             
             if not self.streamer.start(self.config.main_stream_rtmp, self.config.sub_stream_rtmp):
-                print("  ✗ Failed to restart video streamer")
+                logger.error("  [FAIL] Failed to restart video streamer")
                 return False
-            
-            print(f"  ✓ Stream restarted: {self.config.main_width}x{self.config.main_height}@{self.config.main_fps}fps")
+
+            logger.info(f"  [OK] Stream restarted: {self.config.main_width}x{self.config.main_height}@{self.config.main_fps}fps")
             return True
         finally:
             self._restarting = False
@@ -384,8 +585,22 @@ class IPCamera:
         # During restart, streamer is temporarily None - don't exit the loop
         if self._restarting:
             return self._running
-        
+
         if self._streaming_mode == 'go2rtc':
+            if self.streamer is not None and not self.streamer.is_running:
+                # The go2rtc/FFmpeg push has stopped PERMANENTLY: VideoStreamer
+                # only reports is_running == False once its writer thread has
+                # exhausted its bounded reconnect attempts (a transient
+                # reconnect-in-progress keeps reporting True -- see
+                # VideoStreamer.is_running / _reconnect). A dead FFmpeg process
+                # must not take the whole camera down: fall back to serving the
+                # outputs that don't depend on it (MJPEG/snapshot) instead of
+                # reporting not-running and ending the caller's capture loop.
+                logger.warning("  [WARN] go2rtc video streamer stopped permanently (FFmpeg "
+                               "reconnect exhausted) - falling back to MJPEG-only streaming")
+                self._use_mjpeg_fallback = True
+                self._streaming_mode = 'mjpeg'
+                return self._running and self.mjpeg_streamer is not None and self.mjpeg_streamer.is_running
             return self._running and self.streamer is not None and self.streamer.is_running
         elif self._streaming_mode == 'native_webrtc':
             return self._running and self.webrtc_streamer is not None and self.webrtc_streamer.is_running
@@ -408,7 +623,56 @@ class IPCamera:
     @property
     def stats(self) -> Optional[StreamStats]:
         return self.streamer.stats if self.streamer else None
-    
+
+    # ---- Recording passthroughs -----------------------------------------
+    def start_recording(self) -> bool:
+        """Begin recording to disk. Returns True on success.
+
+        Lazily starts the recorder worker if needed, so this works even when
+        recording_enabled is False in config. Fails gracefully (returns False,
+        logs) on a bad path / un-openable codec -- the camera keeps running.
+        """
+        if self.recorder is None:
+            return False
+        return self.recorder.start_recording()
+
+    def stop_recording(self) -> list:
+        """Finalise the current recording; returns the segment file path(s)."""
+        if self.recorder is None:
+            return []
+        return self.recorder.stop_recording()
+
+    @property
+    def is_recording(self) -> bool:
+        return self.recorder is not None and self.recorder.is_recording
+
+    @property
+    def recording_stats(self) -> dict:
+        """Recorder state snapshot (recording bool, file, bytes, drops, ...)."""
+        if self.recorder is None:
+            return {'recording': False, 'worker_running': False}
+        return self.recorder.stats()
+
+    def apply_recording_config(self) -> None:
+        """Reconcile the recorder with the current config after an update.
+
+        Called after /api/config applies a recording_* field. Toggling
+        recording_enabled starts/stops the recorder worker directly (it never
+        needs a stream restart); other knobs (pre-record length, format) are
+        picked up via reconfigure().
+        """
+        if self.recorder is None:
+            return
+        self.recorder.reconfigure()
+        if self.config.recording_enabled and not self.recorder.is_worker_running:
+            self.recorder.start()
+        elif (not self.config.recording_enabled
+              and self.recorder.is_worker_running
+              and not self.recorder.is_recording):
+            # Disabled and idle -> shut the worker down. An in-progress
+            # recording is left running until it is explicitly stopped.
+            self.recorder.stop()
+
     # Video upload mode methods
     def set_video_upload_mode(self, enabled: bool):
         """Enable or disable video upload mode"""
@@ -489,12 +753,12 @@ class IPCamera:
                 
                 try:
                     os.remove(filepath)
-                    print(f"  Cleaned up old video: {filename}")
+                    logger.info(f"  Cleaned up old video: {filename}")
                 except Exception as e:
-                    print(f"  Warning: Could not remove old video {filename}: {e}")
-                    
+                    logger.warning(f"  Warning: Could not remove old video {filename}: {e}")
+
         except Exception as e:
-            print(f"  Warning: Video cleanup failed: {e}")
+            logger.warning(f"  Warning: Video cleanup failed: {e}")
     
     def get_web_ui_html(self) -> str:
         """Load and render the web UI HTML from template"""
@@ -552,7 +816,13 @@ class IPCamera:
             '{{version}}': __version__,
         }
         
+        # HTML-escape every substituted value: several of them (name,
+        # source_info, stream names, ...) are config/user-controlled and would
+        # otherwise allow stored XSS in the web UI. All placeholders sit in
+        # HTML text or quoted-attribute contexts (never inside <script>), so
+        # html.escape (which also escapes quotes) is safe for URLs too --
+        # browsers decode entities in href/src attributes.
         for key, value in replacements.items():
-            html = html.replace(key, value)
-        
+            html = html.replace(key, html_escape(str(value)))
+
         return html

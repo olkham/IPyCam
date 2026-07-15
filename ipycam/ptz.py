@@ -13,11 +13,14 @@ physical motors, servos, gimbals, etc.
 import threading
 import time
 import json
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict
 from typing import Dict, Optional, List, Callable, Protocol, runtime_checkable
 import numpy as np
 import cv2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -210,7 +213,7 @@ class PTZController:
                 if callback and callable(callback):
                     callback(*args, **kwargs)
             except Exception as e:
-                print(f"Hardware handler error in {method}: {e}")
+                logger.error(f"Hardware handler error in {method}: {e}")
     
     def _start_movement_thread(self):
         """Start the background movement thread"""
@@ -474,7 +477,7 @@ class PTZController:
             # Create default home preset
             self.presets['home'] = PTZPreset('home', 'Home', 0.0, 0.0, 0.0)
         except Exception as e:
-            print(f"Failed to load presets: {e}")
+            logger.error(f"Failed to load presets: {e}")
     
     def _save_presets(self, filepath: str = "ptz_presets.json"):
         """Save presets to file"""
@@ -483,4 +486,4 @@ class PTZController:
             with open(filepath, 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            print(f"Failed to save presets: {e}")
+            logger.error(f"Failed to save presets: {e}")

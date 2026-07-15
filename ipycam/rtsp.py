@@ -13,6 +13,7 @@ as it provides better performance and more features.
 import socket
 import threading
 import time
+import logging
 import subprocess
 import struct
 import hashlib
@@ -26,6 +27,8 @@ from enum import Enum
 
 import numpy as np
 import cv2
+
+logger = logging.getLogger(__name__)
 
 
 class RTSPState(Enum):
@@ -51,9 +54,15 @@ class RTSPSession:
     ssrc: int = 0
     timestamp: int = 0
     interleaved: bool = False  # TCP interleaved mode
-    interleaved_channel: int = 0
+    interleaved_channel: int = 0  # RTP channel (the "A" in interleaved=A-B)
+    interleaved_channel_rtcp: int = 1  # RTCP channel (the "B" in interleaved=A-B)
     last_activity: float = field(default_factory=time.time)
     stream_name: Optional[str] = None  # Stream name for this session
+    # Serializes ALL writes to client_socket. In TCP-interleaved mode both the
+    # RTP/RTCP forwarder threads and the RTSP request-handler thread write this
+    # same socket; without mutual exclusion their bytes interleave and corrupt
+    # the stream (client resets -> ffplay "End of file", AgentDVR freeze).
+    send_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 @dataclass
@@ -64,6 +73,9 @@ class RTSPStreamInfo:
     height: int
     fps: int
     bitrate: str = "4M"
+    # Lazily-computed "<sps_b64>,<pps_b64>" for the SDP fmtp line. None = not
+    # yet probed; "" = probed and failed (don't retry / omit the attribute).
+    sprop_parameter_sets: Optional[str] = None
 
 
 class NativeRTSPServer:
@@ -94,6 +106,11 @@ class NativeRTSPServer:
         self._sessions: Dict[str, RTSPSession] = {}
         self._streams: Dict[str, RTSPStreamInfo] = {}
         self._frame_buffers: Dict[str, Optional[np.ndarray]] = {}
+        # Monotonic per-stream frame counter, bumped under the frame lock on
+        # every stream_frame(). The encoder loop writes a frame only when this
+        # changes, so its cadence follows the producer instead of re-pacing on
+        # top of it (avoids the ~1s double-pacing stutter).
+        self._frame_versions: Dict[str, int] = {}
         self._frame_locks: Dict[str, threading.Lock] = {}
         self._encoder_processes: Dict[str, subprocess.Popen] = {}
         self._encoder_threads: Dict[str, threading.Thread] = {}
@@ -131,6 +148,7 @@ class NativeRTSPServer:
                 bitrate=bitrate
             )
             self._frame_buffers[name] = None
+            self._frame_versions[name] = 0
             self._frame_locks[name] = threading.Lock()
         return True
     
@@ -155,7 +173,7 @@ class NativeRTSPServer:
             
             return True
         except Exception as e:
-            print(f"Failed to start RTSP server: {e}")
+            logger.error(f"Failed to start RTSP server: {e}")
             return False
     
     def stop(self):
@@ -175,18 +193,18 @@ class NativeRTSPServer:
                     proc.stdin.close()
                 proc.terminate()
                 proc.wait(timeout=2)
-            except:
+            except Exception:
                 try:
                     proc.kill()
-                except:
+                except Exception:
                     pass
         self._encoder_processes.clear()
-        
+
         # Close server socket
         if self._server_socket:
             try:
                 self._server_socket.close()
-            except:
+            except Exception:
                 pass
             self._server_socket = None
     
@@ -204,12 +222,20 @@ class NativeRTSPServer:
         if not self._is_running or stream_name not in self._streams:
             return False
         
-        # Update frame buffer
+        # Update frame buffer. Store a REFERENCE, not a copy: the caller
+        # (IPCamera's RTSP fan-out worker) hands us either the immutable
+        # `outbound` frame or a freshly-resized sub-frame -- neither is ever
+        # mutated in place (see the outbound immutability contract in
+        # IPCamera.stream). The encoder loop only READS this buffer (an optional
+        # cv2.resize allocates a new array, then tobytes()), so a defensive copy
+        # here is pure waste. A caller that reuses+mutates its own frame buffer
+        # in place must copy before calling.
         lock = self._frame_locks.get(stream_name)
         if lock:
             with lock:
-                self._frame_buffers[stream_name] = frame.copy()
-        
+                self._frame_buffers[stream_name] = frame
+                self._frame_versions[stream_name] = self._frame_versions.get(stream_name, 0) + 1
+
         self._total_frames += 1
         self._frame_timestamps.append(time.time())
         
@@ -267,14 +293,14 @@ class NativeRTSPServer:
                 continue
             except Exception as e:
                 if self._is_running:
-                    print(f"RTSP accept error: {e}")
+                    logger.error(f"RTSP accept error: {e}")
                 break
     
     def _handle_client(self, client_socket: socket.socket, client_address: tuple):
         """Handle an RTSP client connection"""
         session_id = None
         if self.verbose:
-            print(f"[RTSP] New client connection from {client_address[0]}:{client_address[1]}")
+            logger.debug(f"[RTSP] New client connection from {client_address[0]}:{client_address[1]}")
         
         try:
             while self._is_running:
@@ -287,7 +313,7 @@ class NativeRTSPServer:
                 # Log first line of request
                 first_line = request_text.split('\r\n')[0] if request_text else ""
                 if self.verbose:
-                    print(f"[RTSP] <- {first_line}")
+                    logger.debug(f"[RTSP] <- {first_line}")
                 
                 # Parse and handle request
                 response, session_id = self._handle_rtsp_request(
@@ -301,8 +327,8 @@ class NativeRTSPServer:
                     # Log response status
                     resp_first_line = response.split('\r\n')[0] if response else ""
                     if self.verbose:
-                        print(f"[RTSP] -> {resp_first_line}")
-                    client_socket.sendall(response.encode('utf-8'))
+                        logger.debug(f"[RTSP] -> {resp_first_line}")
+                    self._send_client_response(client_socket, session_id, response)
                 
                 # Check if session was terminated
                 if session_id:
@@ -312,17 +338,17 @@ class NativeRTSPServer:
                         
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, socket.timeout):
             if self.verbose:
-                print(f"[RTSP] Client {client_address[0]} disconnected")
+                logger.debug(f"[RTSP] Client {client_address[0]} disconnected")
         except OSError as e:
             # Handle Windows-specific errors like WinError 10053
             if hasattr(e, 'winerror') and e.winerror in (10053, 10054):  # Connection aborted/reset
                 if self.verbose:
-                    print(f"[RTSP] Client {client_address[0]} connection closed")
+                    logger.debug(f"[RTSP] Client {client_address[0]} connection closed")
             else:
                 if self.verbose:
-                    print(f"[RTSP] Client error: {e}")
+                    logger.debug(f"[RTSP] Client error: {e}")
         except Exception as e:
-            print(f"[RTSP] Client error: {e}")
+            logger.error(f"[RTSP] Client error: {e}")
         finally:
             # Clean up session
             if session_id and session_id in self._sessions:
@@ -333,9 +359,31 @@ class NativeRTSPServer:
             
             try:
                 client_socket.close()
-            except:
+            except Exception:
                 pass
-    
+
+    def _send_client_response(
+        self,
+        client_socket: socket.socket,
+        session_id: Optional[str],
+        response: str,
+    ):
+        """Write a full RTSP response to the client socket atomically.
+
+        In TCP-interleaved mode the RTP/RTCP forwarder threads write the same
+        socket concurrently; hold the session's send_lock so a response and an
+        interleaved RTP frame can never interleave on the wire. When no session
+        exists yet (e.g. the initial OPTIONS/DESCRIBE) there is no forwarder, so
+        the lock is unnecessary.
+        """
+        data = response.encode('utf-8')
+        session = self._sessions.get(session_id) if session_id else None
+        if session is not None:
+            with session.send_lock:
+                client_socket.sendall(data)
+        else:
+            client_socket.sendall(data)
+
     def _receive_rtsp_request(self, client_socket: socket.socket) -> Optional[bytes]:
         """Receive a complete RTSP request"""
         data = b""
@@ -486,7 +534,15 @@ class NativeRTSPServer:
         # Parse base URL for control attribute
         # VLC expects proper control URLs
         base_uri = uri.rstrip('/')
-        
+
+        # Advertise the H.264 parameter sets out-of-band so decoders that rely
+        # on them (e.g. TinyCam Pro) render the very first frame correctly
+        # instead of showing a green bar until the first in-band IDR arrives.
+        fmtp_line = "a=fmtp:96 packetization-mode=1"
+        sprop = self._get_sprop_parameter_sets(stream_info)
+        if sprop:
+            fmtp_line += f";sprop-parameter-sets={sprop}"
+
         # More complete SDP for H.264 video - VLC compatible
         sdp = (
             "v=0\r\n"
@@ -502,11 +558,119 @@ class NativeRTSPServer:
             "c=IN IP4 0.0.0.0\r\n"
             "b=AS:4000\r\n"
             "a=rtpmap:96 H264/90000\r\n"
-            "a=fmtp:96 packetization-mode=1\r\n"
+            f"{fmtp_line}\r\n"
             f"a=framerate:{stream_info.fps}\r\n"
             f"a=control:trackID=0\r\n"
         )
         return sdp
+
+    def _get_sprop_parameter_sets(self, stream_info: RTSPStreamInfo) -> str:
+        """Return "<sps_b64>,<pps_b64>" for the SDP fmtp line, or "" if the
+        parameter sets could not be determined.
+
+        The result is cached on the RTSPStreamInfo (encoder params are fixed
+        per resolution). Any failure is swallowed so DESCRIBE still succeeds --
+        we simply omit sprop-parameter-sets and fall back to in-band delivery.
+        """
+        cached = getattr(stream_info, 'sprop_parameter_sets', None)
+        if cached is not None:
+            return cached
+
+        result = ""
+        try:
+            sps_b64, pps_b64 = self._probe_h264_parameter_sets(
+                stream_info.width, stream_info.height, stream_info.fps
+            )
+            if sps_b64 and pps_b64:
+                result = f"{sps_b64},{pps_b64}"
+        except Exception as e:
+            logger.debug(f"[RTSP] SPS/PPS probe failed, omitting sprop-parameter-sets: {e}")
+            result = ""
+
+        try:
+            stream_info.sprop_parameter_sets = result
+        except Exception:
+            pass
+        return result
+
+    def _probe_h264_parameter_sets(self, width: int, height: int, fps: int):
+        """Encode a couple of black frames with the fixed encoder parameters and
+        extract the base64 SPS/PPS from the resulting Annex-B bitstream.
+
+        Returns (sps_b64, pps_b64). Wrapped as its own method so tests can
+        monkeypatch it without spawning ffmpeg.
+        """
+        black = np.zeros((height, width, 3), dtype=np.uint8).tobytes()
+        cmd = [
+            "ffmpeg", "-nostdin", "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{width}x{height}",
+            "-pix_fmt", "bgr24",
+            "-r", str(fps),
+            "-i", "-",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-level", "3.1",
+            "-pix_fmt", "yuv420p",
+            "-frames:v", "2",
+            "-f", "h264",
+            "pipe:1",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+        )
+        out, _ = proc.communicate(input=black * 2, timeout=10)
+        return self._extract_sps_pps(out)
+
+    @staticmethod
+    def _iter_nal_units(data: bytes):
+        """Yield the payload bytes of each NAL unit in an Annex-B bitstream,
+        stripping the 3- or 4-byte start codes."""
+        positions = []
+        n = len(data)
+        i = 0
+        while i + 2 < n:
+            if data[i] == 0 and data[i + 1] == 0:
+                if data[i + 2] == 1:
+                    positions.append((i, 3))
+                    i += 3
+                    continue
+                if i + 3 < n and data[i + 2] == 0 and data[i + 3] == 1:
+                    positions.append((i, 4))
+                    i += 4
+                    continue
+            i += 1
+        for idx, (pos, sclen) in enumerate(positions):
+            start = pos + sclen
+            end = positions[idx + 1][0] if idx + 1 < len(positions) else n
+            yield data[start:end]
+
+    def _extract_sps_pps(self, data: bytes):
+        """Scan an Annex-B bitstream for the first SPS (NAL type 7) and PPS
+        (NAL type 8) and return them base64-encoded."""
+        sps = None
+        pps = None
+        for nal in self._iter_nal_units(data):
+            if not nal:
+                continue
+            nal_type = nal[0] & 0x1F
+            if nal_type == 7 and sps is None:
+                sps = nal
+            elif nal_type == 8 and pps is None:
+                pps = nal
+        if not sps or not pps:
+            raise ValueError("SPS/PPS not found in probe output")
+        return (
+            base64.b64encode(sps).decode('ascii'),
+            base64.b64encode(pps).decode('ascii'),
+        )
     
     def _handle_setup(
         self,
@@ -526,6 +690,7 @@ class NativeRTSPServer:
             session_id = hashlib.md5(f"{client_address}{time.time()}".encode()).hexdigest()[:16]
         
         session = self._sessions.get(session_id)
+        is_new_session = session is None
         if not session:
             session = RTSPSession(
                 session_id=session_id,
@@ -543,15 +708,17 @@ class NativeRTSPServer:
             # Note: We support this but it's less tested than UDP
             session.interleaved = True
             
-            # Parse interleaved channels
+            # Parse interleaved channels: interleaved=A-B where A=RTP, B=RTCP.
             interleaved_match = re.search(r'interleaved=(\d+)-(\d+)', transport)
             if interleaved_match:
                 session.interleaved_channel = int(interleaved_match.group(1))
+                session.interleaved_channel_rtcp = int(interleaved_match.group(2))
             else:
                 session.interleaved_channel = 0
-            
+                session.interleaved_channel_rtcp = 1
+
             if self.verbose:
-                print(f"[RTSP] Client requested TCP interleaved mode (channel {session.interleaved_channel})")
+                logger.debug(f"[RTSP] Client requested TCP interleaved mode (channels {session.interleaved_channel}-{session.interleaved_channel_rtcp})")
             transport_response = f"RTP/AVP/TCP;unicast;interleaved={session.interleaved_channel}-{session.interleaved_channel + 1}"
         else:
             # UDP mode (preferred)
@@ -574,7 +741,16 @@ class NativeRTSPServer:
                 server_rtp_port = session.rtp_socket.getsockname()[1]
                 server_rtcp_port = server_rtp_port + 1
             except Exception as e:
-                print(f"Failed to create RTP socket: {e}")
+                logger.error(f"Failed to create RTP socket: {e}")
+                # Don't leak a half-initialised session we created in this call.
+                if is_new_session:
+                    with self._lock:
+                        self._sessions.pop(session_id, None)
+                    if session.rtp_socket is not None:
+                        try:
+                            session.rtp_socket.close()
+                        except OSError:
+                            pass
                 return self._error_response(500, "Internal Server Error", cseq), session_id
             
             transport_response = f"RTP/AVP;unicast;client_port={session.rtp_port}-{session.rtcp_port};server_port={server_rtp_port}-{server_rtcp_port}"
@@ -676,15 +852,15 @@ class NativeRTSPServer:
         """Start RTP streaming for a session using FFmpeg"""
         stream_info = self._streams.get(stream_name)
         if not stream_info and self.verbose:
-            print(f"[RTSP] Stream '{stream_name}' not found")
+            logger.debug(f"[RTSP] Stream '{stream_name}' not found")
             return
-        
+
         if self.verbose:
-            print(f"[RTSP] Starting RTP stream for session {session.session_id[:8]}...")
-            print(f"[RTSP]   Mode: {'TCP interleaved' if session.interleaved else 'UDP'}")
+            logger.debug(f"[RTSP] Starting RTP stream for session {session.session_id[:8]}...")
+            logger.debug(f"[RTSP]   Mode: {'TCP interleaved' if session.interleaved else 'UDP'}")
         if not session.interleaved:
             if self.verbose:
-                print(f"[RTSP]   Client: {session.client_address[0]}:{session.rtp_port}")
+                logger.debug(f"[RTSP]   Client: {session.client_address[0]}:{session.rtp_port}")
         
         # Start encoder thread for this session
         thread = threading.Thread(
@@ -700,7 +876,8 @@ class NativeRTSPServer:
     def _rtp_encoder_loop(self, session: RTSPSession, stream_name: str, stream_info: RTSPStreamInfo):
         """Encoder loop that sends RTP packets"""
         local_rtp_socket = None
-        
+        local_rtcp_socket = None
+
         try:
             if session.interleaved:
                 # TCP interleaved mode - create local UDP socket to receive from FFmpeg
@@ -709,10 +886,29 @@ class NativeRTSPServer:
                 local_rtp_socket.bind(('127.0.0.1', 0))
                 local_rtp_port = local_rtp_socket.getsockname()[1]
                 local_rtp_socket.settimeout(0.1)
-                
-                ffmpeg_cmd = self._build_ffmpeg_rtp_cmd_tcp_local(stream_info, local_rtp_port)
+
+                # Second local socket for RTCP: ffmpeg's RTP muxer also emits
+                # Sender Reports (to the RTCP port); some clients need them for
+                # liveness/timing. Decouple it from the RTP port via ?rtcpport=
+                # so we don't have to gamble on rtp_port+1 being free.
+                local_rtcp_port = None
+                try:
+                    local_rtcp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    local_rtcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    local_rtcp_socket.bind(('127.0.0.1', 0))
+                    local_rtcp_port = local_rtcp_socket.getsockname()[1]
+                    local_rtcp_socket.settimeout(0.1)
+                except OSError as e:
+                    if self.verbose:
+                        logger.debug(f"[RTSP] Could not bind local RTCP socket, forwarding RTP only: {e}")
+                    local_rtcp_socket = None
+                    local_rtcp_port = None
+
+                ffmpeg_cmd = self._build_ffmpeg_rtp_cmd_tcp_local(
+                    stream_info, local_rtp_port, local_rtcp_port
+                )
                 if self.verbose:
-                    print(f"[RTSP] TCP interleaved: FFmpeg -> localhost:{local_rtp_port} -> client")
+                    logger.debug(f"[RTSP] TCP interleaved: FFmpeg -> localhost:{local_rtp_port} -> client")
             else:
                 # UDP mode - FFmpeg sends directly to client
                 ffmpeg_cmd = self._build_ffmpeg_rtp_cmd_udp(stream_info, session)
@@ -721,7 +917,7 @@ class NativeRTSPServer:
                 return
 
             if self.verbose:
-                print(f"[RTSP] Starting FFmpeg encoder...")
+                logger.debug(f"[RTSP] Starting FFmpeg encoder...")
             
             # Start FFmpeg process
             process = subprocess.Popen(
@@ -735,73 +931,90 @@ class NativeRTSPServer:
             encoder_key = f"{session.session_id}_{stream_name}"
             self._encoder_processes[encoder_key] = process
             
-            # If TCP interleaved, start a thread to forward RTP packets
+            # If TCP interleaved, start forwarder thread(s): one for RTP on the
+            # RTP channel, and (when we bound an RTCP socket) one for RTCP on the
+            # RTCP channel. Both write client_socket under session.send_lock.
             if session.interleaved and local_rtp_socket:
                 forward_thread = threading.Thread(
                     target=self._tcp_rtp_forwarder,
-                    args=(local_rtp_socket, session),
+                    args=(local_rtp_socket, session, session.interleaved_channel),
                     daemon=True
                 )
                 forward_thread.start()
-            
-            # Feed frames to encoder
-            frame_interval = 1.0 / stream_info.fps
-            last_frame_time = time.time()
+
+                if local_rtcp_socket is not None:
+                    rtcp_thread = threading.Thread(
+                        target=self._tcp_rtp_forwarder,
+                        args=(local_rtcp_socket, session, session.interleaved_channel_rtcp),
+                        daemon=True
+                    )
+                    rtcp_thread.start()
+
+            # Feed frames to encoder. Write a frame only when the shared buffer
+            # advances (version change) so cadence follows the producer instead
+            # of re-pacing on top of it; between new frames do a short bounded
+            # wait rather than a full frame-interval sleep. This runs on its own
+            # thread and never blocks the capture/producer thread.
+            frame_interval = 1.0 / stream_info.fps if stream_info.fps > 0 else 0.033
+            poll_wait = min(frame_interval, 0.01)
+            last_version = -1
             frames_written = 0
-            
+
             while self._is_running and session.state == RTSPState.PLAYING:
-                # Get latest frame
+                # Get latest frame if it changed since we last wrote one.
                 lock = self._frame_locks.get(stream_name)
                 frame = None
+                version = last_version
                 if lock:
                     with lock:
-                        if self._frame_buffers.get(stream_name) is not None:
-                            frame = self._frame_buffers[stream_name]
-                
+                        version = self._frame_versions.get(stream_name, 0)
+                        buf = self._frame_buffers.get(stream_name)
+                        if buf is not None and version != last_version:
+                            frame = buf
+
                 if frame is not None and process.stdin:
                     # Resize if needed
                     if frame.shape[1] != stream_info.width or frame.shape[0] != stream_info.height:
                         frame = cv2.resize(frame, (stream_info.width, stream_info.height))
-                    
+
                     # Write to FFmpeg
                     try:
                         process.stdin.write(frame.tobytes())
                         frames_written += 1
+                        last_version = version
                         if frames_written % 15 == 0:
                             process.stdin.flush()
                     except (BrokenPipeError, OSError) as e:
                         if self.verbose:
-                            print(f"[RTSP] FFmpeg pipe error: {e}")
+                            logger.debug(f"[RTSP] FFmpeg pipe error: {e}")
                         break
-                
-                # Pace frames
-                elapsed = time.time() - last_frame_time
-                sleep_time = frame_interval - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                last_frame_time = time.time()
-                
+                else:
+                    # No new frame yet: brief bounded wait so we pick up the next
+                    # producer frame promptly without busy-spinning.
+                    time.sleep(poll_wait)
+
                 # Check if process is still alive
                 if process.poll() is not None:
                     stderr = process.stderr.read().decode('utf-8', errors='ignore') if process.stderr else ""
                     if stderr:
                         if self.verbose:
-                            print(f"[RTSP] FFmpeg exited: {stderr[:200]}")
+                            logger.debug(f"[RTSP] FFmpeg exited: {stderr[:200]}")
                     break
-            
+
             if self.verbose:
-                print(f"[RTSP] Encoder loop ended, wrote {frames_written} frames")
-            
+                logger.debug(f"[RTSP] Encoder loop ended, wrote {frames_written} frames")
+
         except Exception as e:
-            print(f"[RTSP] RTP encoder error: {e}")
+            logger.error(f"[RTSP] RTP encoder error: {e}")
         finally:
             # Cleanup
-            if local_rtp_socket:
-                try:
-                    local_rtp_socket.close()
-                except:
-                    pass
-            
+            for sock in (local_rtp_socket, local_rtcp_socket):
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+
             encoder_key = f"{session.session_id}_{stream_name}"
             proc = self._encoder_processes.pop(encoder_key, None)
             if proc:
@@ -810,16 +1023,38 @@ class NativeRTSPServer:
                         proc.stdin.close()
                     proc.terminate()
                     proc.wait(timeout=2)
-                except:
+                except Exception:
                     try:
                         proc.kill()
-                    except:
+                    except Exception:
                         pass
-    
+
+    @staticmethod
+    def _gop_size(fps: int) -> int:
+        """Keyframe interval in frames. ~2x fps (a keyframe every ~2s) instead
+        of every second so periodic IDRs are spread out and hitch less."""
+        return max(1, int(fps) * 2)
+
+    @staticmethod
+    def _bufsize_for(bitrate: str) -> str:
+        """VBV bufsize ~2x the target bitrate, so keyframe bursts are smoothed
+        by the rate controller instead of hitching once per GOP. Falls back to
+        a sane default if the bitrate string can't be parsed."""
+        try:
+            m = re.match(r'^\s*(\d+(?:\.\d+)?)\s*([kKmMgG]?)', str(bitrate))
+            if not m:
+                return "2M"
+            value = float(m.group(1)) * 2
+            unit = m.group(2)
+            value_str = str(int(value)) if value.is_integer() else f"{value:g}"
+            return f"{value_str}{unit}"
+        except Exception:
+            return "2M"
+
     def _build_ffmpeg_rtp_cmd_udp(self, stream_info: RTSPStreamInfo, session: RTSPSession) -> list:
         """Build FFmpeg command for UDP RTP output"""
         client_ip = session.client_address[0]
-        
+
         # Use payload type 96 to match SDP
         # VLC and other clients expect proper RTP packetization
         return [
@@ -836,22 +1071,30 @@ class NativeRTSPServer:
             "-profile:v", "baseline",
             "-level", "3.1",
             "-pix_fmt", "yuv420p",
-            "-g", str(stream_info.fps),  # Keyframe every second
+            "-g", str(self._gop_size(stream_info.fps)),  # Keyframe every ~2s
             "-b:v", stream_info.bitrate,
             "-maxrate", stream_info.bitrate,
-            "-bufsize", "500k",
+            "-bufsize", self._bufsize_for(stream_info.bitrate),
             "-an",  # No audio
             "-f", "rtp",
             "-payload_type", "96",
             f"rtp://{client_ip}:{session.rtp_port}?localport={session.rtp_socket.getsockname()[1] if session.rtp_socket else 0}"
         ]
-    
+
     def _build_ffmpeg_rtp_cmd_tcp(self, stream_info: RTSPStreamInfo, session: RTSPSession) -> list:
         """Build FFmpeg command for TCP output (piped RTP) - DEPRECATED, use _build_ffmpeg_rtp_cmd_tcp_local"""
         return self._build_ffmpeg_rtp_cmd_tcp_local(stream_info, 0)
-    
-    def _build_ffmpeg_rtp_cmd_tcp_local(self, stream_info: RTSPStreamInfo, local_port: int) -> list:
-        """Build FFmpeg command that outputs RTP to a local UDP port for TCP forwarding"""
+
+    def _build_ffmpeg_rtp_cmd_tcp_local(self, stream_info: RTSPStreamInfo, local_port: int,
+                                        rtcp_port: Optional[int] = None) -> list:
+        """Build FFmpeg command that outputs RTP to a local UDP port for TCP forwarding.
+
+        When rtcp_port is given, ffmpeg's RTP muxer sends its RTCP Sender Reports
+        to that port (via ?rtcpport=) so we can forward them on the RTCP channel.
+        """
+        output = f"rtp://127.0.0.1:{local_port}"
+        if rtcp_port is not None:
+            output += f"?rtcpport={rtcp_port}"
         return [
             "ffmpeg", "-y",
             "-f", "rawvideo",
@@ -866,46 +1109,57 @@ class NativeRTSPServer:
             "-profile:v", "baseline",
             "-level", "3.1",
             "-pix_fmt", "yuv420p",
-            "-g", str(stream_info.fps),
+            "-g", str(self._gop_size(stream_info.fps)),
             "-b:v", stream_info.bitrate,
             "-maxrate", stream_info.bitrate,
-            "-bufsize", "500k",
+            "-bufsize", self._bufsize_for(stream_info.bitrate),
             "-an",
             "-f", "rtp",
             "-payload_type", "96",
-            f"rtp://127.0.0.1:{local_port}"
+            output
         ]
     
-    def _tcp_rtp_forwarder(self, local_socket: socket.socket, session: RTSPSession):
-        """Forward RTP packets from local UDP socket to client via TCP interleaved"""
+    def _tcp_rtp_forwarder(self, local_socket: socket.socket, session: RTSPSession,
+                           channel: Optional[int] = None):
+        """Forward RTP/RTCP datagrams from a local UDP socket to the client via
+        the RTSP TCP-interleaved framing.
+
+        channel selects the interleaved channel (RTP=A, RTCP=B). Every write to
+        client_socket is done under session.send_lock so an interleaved frame is
+        never split by, or split, a concurrent RTSP response or the other
+        forwarder's frame.
+        """
+        if channel is None:
+            channel = session.interleaved_channel
         packets_sent = 0
         try:
             if self.verbose:
-                print(f"[RTSP] TCP RTP forwarder started for session {session.session_id[:8]}")
+                logger.debug(f"[RTSP] TCP forwarder started for session {session.session_id[:8]} (channel {channel})")
             while self._is_running and session.state == RTSPState.PLAYING:
                 try:
                     data, addr = local_socket.recvfrom(2048)
                     if not data:
                         continue
-                    
-                    # Send as interleaved RTP
+
+                    # Send as interleaved data
                     # Format: $ + channel (1 byte) + length (2 bytes big-endian) + data
-                    header = bytes([0x24, session.interleaved_channel]) + struct.pack('>H', len(data))
-                    
-                    session.client_socket.sendall(header + data)
+                    header = bytes([0x24, channel]) + struct.pack('>H', len(data))
+
+                    with session.send_lock:
+                        session.client_socket.sendall(header + data)
                     packets_sent += 1
                     
                 except socket.timeout:
                     continue
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError) as e:
                     if self.verbose:
-                        print(f"[RTSP] TCP forwarder connection error: {e}")
+                        logger.debug(f"[RTSP] TCP forwarder connection error: {e}")
                     break
-                    
+
         except Exception as e:
-            print(f"[RTSP] TCP RTP forwarder error: {e}")
+            logger.error(f"[RTSP] TCP RTP forwarder error: {e}")
         finally:
-            print(f"[RTSP] TCP RTP forwarder ended, sent {packets_sent} packets")
+            logger.debug(f"[RTSP] TCP RTP forwarder ended, sent {packets_sent} packets")
     
     def _tcp_rtp_reader(self, process: subprocess.Popen, session: RTSPSession):
         """Read RTP packets from FFmpeg stdout and send via TCP interleaved - DEPRECATED"""
@@ -921,12 +1175,13 @@ class NativeRTSPServer:
                 header = bytes([0x24, session.interleaved_channel]) + struct.pack('>H', len(data))
                 
                 try:
-                    session.client_socket.sendall(header + data)
+                    with session.send_lock:
+                        session.client_socket.sendall(header + data)
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     break
-                    
+
         except Exception as e:
-            print(f"TCP RTP reader error: {e}")
+            logger.error(f"TCP RTP reader error: {e}")
     
     def _close_session(self, session: RTSPSession):
         """Close and clean up a session"""
@@ -935,7 +1190,7 @@ class NativeRTSPServer:
         if session.rtp_socket:
             try:
                 session.rtp_socket.close()
-            except:
+            except Exception:
                 pass
         
         # Stop any encoder processes for this session
@@ -946,10 +1201,10 @@ class NativeRTSPServer:
                     try:
                         proc.terminate()
                         proc.wait(timeout=1)
-                    except:
+                    except Exception:
                         try:
                             proc.kill()
-                        except:
+                        except Exception:
                             pass
 
 
