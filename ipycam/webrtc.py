@@ -31,7 +31,7 @@ except ImportError:
     MediaRelay = None
     VideoFrame = None
 
-logger = logging.getLogger("ipycam.webrtc")
+logger = logging.getLogger(__name__)
 
 
 # def check_aiortc_available() -> bool:
@@ -115,15 +115,38 @@ if AIORTC_AVAILABLE:
             self._frame_count = 0
         
         def update(self, frame: np.ndarray):
-            """Update the current frame."""
+            """Store the latest frame for WebRTC tracks to read.
+
+            Stores a REFERENCE, not a copy. The frame handed in is the shared
+            ``outbound`` buffer from IPCamera.stream(), which is immutable by
+            contract (a fresh buffer every iteration that no consumer mutates in
+            place -- see the outbound immutability contract there). Copying here
+            would waste ~6 MB/frame at 1080p BGR for nothing. Per-peer isolation
+            of the *encoded* output is still guaranteed downstream:
+            av.VideoFrame.from_ndarray (in CameraVideoTrack.recv) copies the
+            pixels into the encoder's own buffer.
+
+            The "is anyone watching?" gate lives one layer up in IPCamera.stream
+            (WebRTC is only fed when connection_count > 0), so this is only
+            reached when frames are actually wanted. If this buffer is ever fed
+            frames a caller mutates in place, restore the defensive copy here.
+            """
             with self._frame_lock:
-                self._frame = frame.copy()
+                self._frame = frame
                 self._frame_count += 1
-        
+
         def get(self):
-            """Get the current frame (or None if not available)."""
+            """Get the current frame, or None if none available.
+
+            Returns a REFERENCE, not a copy. The stored frame is immutable by
+            contract (see update()); recv() only reads it and hands it to
+            av.VideoFrame.from_ndarray, which copies the pixels into the
+            encoder's own buffer -- so a defensive copy here would be a second
+            redundant ~6 MB memcpy per peer per frame, stalling the asyncio
+            event loop for nothing.
+            """
             with self._frame_lock:
-                return self._frame.copy() if self._frame is not None else None
+                return self._frame
     
     
     class CameraVideoTrack(VideoStreamTrack):
@@ -253,7 +276,7 @@ if AIORTC_AVAILABLE:
                 self.stats = WebRTCStats()
                 
                 logger.info("Native WebRTC streamer started")
-                print("  ✓ Native WebRTC event loop started successfully")
+                logger.info("  [OK] Native WebRTC event loop started successfully")
                 return True
                 
             except Exception as e:

@@ -9,6 +9,8 @@
   "rtmp_port": 1935,
   "web_port": 8081,
   "go2rtc_api_port": 1984,
+  "username": "",
+  "password": "",
   "main_width": 1920,
   "main_height": 1080,
   "main_fps": 30,
@@ -25,6 +27,14 @@
   "show_timestamp": true,
   "timestamp_format": "%Y-%m-%d %H:%M:%S",
   "timestamp_position": "bottom-left",
+  "flip": false,
+  "mirror": false,
+  "rotation": 0,
+  "recording_enabled": false,
+  "recording_format": "mp4",
+  "recording_path": "recordings",
+  "recording_max_file_mb": 1024,
+  "recording_pre_seconds": 0,
   "source_type": "camera",
-  "source_info": "Camera Index 0"
+  "source_info": "Camera Index 2"
 }

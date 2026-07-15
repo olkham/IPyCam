@@ -3,12 +3,42 @@
 /**
  * Stream state management
  */
-let currentStreamType = 'rtc';  // 'rtc', 'native_rtc', or 'mjpeg'
-let currentStream = 'main';     // 'main', 'sub', or 'mjpeg'
+// Which transport is being previewed: 'rtc' (go2rtc WebRTC iframe),
+// 'native_rtc' (Python native WebRTC), or 'mjpeg' (native MJPEG).
+let currentTransport = 'rtc';
 let streamingMode = 'go2rtc';   // 'go2rtc', 'native_webrtc', or 'mjpeg' (server mode)
 let mjpegUrl = '';
 let nativeWebRTCAvailable = false;
 let nativePeerConnection = null;
+
+/**
+ * Which stream the preview shows: 'main' (full resolution) or 'sub' (lower).
+ * Applies to whichever transport is active. Native WebRTC is main-only
+ * server-side, so 'sub' is ignored (and its button disabled) for that
+ * transport -- see transportSupportsSub(). Persisted across reloads.
+ */
+let currentQuality = 'main';
+try {
+    const stored = localStorage.getItem('ipycam_stream_quality')
+        || localStorage.getItem('ipycam_mjpeg_quality');  // migrate old key
+    if (stored === 'main' || stored === 'sub') {
+        currentQuality = stored;
+    }
+} catch (e) {
+    // localStorage unavailable (e.g. private browsing) -- default stands.
+}
+
+// Transports that can serve the lower-resolution sub stream. Native WebRTC
+// (aiortc) publishes only the main track, so it is main-only.
+function transportSupportsSub(transport) {
+    return transport === 'rtc' || transport === 'mjpeg';
+}
+
+// The quality actually rendered for the current transport: 'sub' is coerced to
+// 'main' on transports that don't support it, without losing the user's choice.
+function effectiveQuality() {
+    return transportSupportsSub(currentTransport) ? currentQuality : 'main';
+}
 
 /**
  * Video upload state management
@@ -99,79 +129,122 @@ function updatePtzStatus() {
 }
 
 /**
- * Switch between stream types and sources
- * @param {string} stream - 'main', 'sub', or 'mjpeg'
- * @param {string} type - 'rtc', 'native_rtc', or 'mjpeg'
+ * Switch the preview transport: 'rtc' (go2rtc), 'native_rtc' (Python WebRTC),
+ * or 'mjpeg'. The Main/Sub selection (currentQuality) is preserved across
+ * transports. Ignores transports the server marked unavailable.
  */
-function switchStream(stream, type) {
-    // Block go2rtc RTC streams if in MJPEG-only or native_webrtc mode
-    if (type === 'rtc' && streamingMode !== 'go2rtc') {
-        return;  // Don't switch - go2rtc not available
+function switchTransport(type) {
+    if (type !== 'rtc' && type !== 'native_rtc' && type !== 'mjpeg') return;
+
+    const btn = document.querySelector(`#transport-switcher .btn-stream[data-type="${type}"]`);
+    if (btn && btn.classList.contains('disabled')) return;
+    if (type === 'rtc' && streamingMode !== 'go2rtc') return;  // go2rtc not available
+
+    currentTransport = type;
+    applyPreview();
+}
+
+/**
+ * Switch the Main/Sub stream for the active transport. No-op for 'sub' on
+ * main-only transports (native WebRTC). Persists the choice.
+ */
+function switchQuality(quality) {
+    if (quality !== 'main' && quality !== 'sub') return;
+    if (quality === 'sub' && !transportSupportsSub(currentTransport)) return;
+
+    currentQuality = quality;
+    try {
+        localStorage.setItem('ipycam_stream_quality', quality);
+    } catch (e) {
+        // localStorage unavailable -- selection still applies for this session.
     }
-    
+    applyPreview();
+}
+
+/**
+ * Render the preview for the current (transport, quality) pair and refresh the
+ * switcher button states + indicators. Every preview change flows through here
+ * so transport and quality switches stay consistent.
+ */
+function applyPreview() {
     const iframe = document.getElementById('preview-iframe');
     const mjpegImg = document.getElementById('preview-mjpeg');
     const nativeVideo = document.getElementById('preview-native-rtc');
     const mainStream = iframe.dataset.mainStream;
     const subStream = iframe.dataset.subStream;
     const apiUrl = iframe.dataset.apiUrl;
-    
-    currentStream = stream;
-    currentStreamType = type;
-    
-    // Stop any existing native WebRTC connection
-    if (nativePeerConnection) {
+    const quality = effectiveQuality();
+
+    // Tear down any native WebRTC connection when leaving that transport.
+    if (currentTransport !== 'native_rtc' && nativePeerConnection) {
         nativePeerConnection.close();
         nativePeerConnection = null;
     }
-    
-    if (type === 'mjpeg' || stream === 'mjpeg') {
-        // Switch to MJPEG mode - always use native MJPEG endpoint
+
+    clearResolutionIndicator();  // stale until the new frame's metadata loads
+
+    if (currentTransport === 'mjpeg') {
         iframe.style.display = 'none';
         nativeVideo.style.display = 'none';
+        nativeVideo.srcObject = null;
         mjpegImg.style.display = 'block';
-        // Use full URL from mjpegUrl, or construct from current location
-        const mjpegSrc = mjpegUrl || (window.location.origin + '/stream.mjpeg');
-        mjpegImg.src = mjpegSrc;
-        currentStreamType = 'mjpeg';
-        currentStream = 'mjpeg';
-    } else if (type === 'native_rtc') {
-        // Switch to native WebRTC mode
+        mjpegImg.src = buildMjpegUrl(quality);
+    } else if (currentTransport === 'native_rtc') {
         iframe.style.display = 'none';
         mjpegImg.style.display = 'none';
-        mjpegImg.src = '';  // Stop MJPEG loading
+        mjpegImg.src = '';  // stop MJPEG loading
         nativeVideo.style.display = 'block';
-        startNativeWebRTC(nativeVideo);
-        currentStreamType = 'native_rtc';
-    } else {
-        // Switch to go2rtc WebRTC mode
+        startNativeWebRTC(nativeVideo);  // main-only server-side
+    } else {  // 'rtc' -- go2rtc WebRTC iframe
         mjpegImg.style.display = 'none';
-        mjpegImg.src = '';  // Stop MJPEG loading
+        mjpegImg.src = '';
         nativeVideo.style.display = 'none';
+        nativeVideo.srcObject = null;
         iframe.style.display = 'block';
-        const streamName = stream === 'sub' ? subStream : mainStream;
-        iframe.src = `${apiUrl}/stream.html?src=${streamName}`;
+        iframe.src = `${apiUrl}/stream.html?src=${quality === 'sub' ? subStream : mainStream}`;
     }
-    
-    // Update button states
-    document.querySelectorAll('.btn-stream').forEach(btn => {
-        const btnStream = btn.dataset.stream;
-        const btnType = btn.dataset.type;
-        let isActive = false;
-        
-        if (type === 'mjpeg' || stream === 'mjpeg') {
-            isActive = btnStream === 'mjpeg';
-        } else if (type === 'native_rtc') {
-            isActive = btnType === 'native_rtc';
-        } else {
-            isActive = btnStream === stream && btnType === type;
-        }
-        
-        btn.classList.toggle('active', isActive);
-    });
-    
-    // Update stream mode indicator to show current view
+
+    updateTransportButtons();
+    updateQualityButtons();
     updateStreamModeIndicator();
+}
+
+/**
+ * Mark the active transport button.
+ */
+function updateTransportButtons() {
+    document.querySelectorAll('#transport-switcher .btn-stream').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === currentTransport);
+    });
+}
+
+/**
+ * Mark the active Main/Sub button and disable Sub on main-only transports.
+ */
+function updateQualityButtons() {
+    const supportsSub = transportSupportsSub(currentTransport);
+    const active = effectiveQuality();
+    document.querySelectorAll('#quality-switcher .btn-stream').forEach(btn => {
+        const q = btn.dataset.quality;
+        btn.classList.toggle('active', q === active);
+        if (q === 'sub') {
+            btn.classList.toggle('disabled', !supportsSub);
+            btn.title = supportsSub ? '' : 'Sub stream not available for native WebRTC (main-only)';
+        }
+    });
+}
+
+/**
+ * Build the MJPEG stream URL for the given quality ('main' or 'sub').
+ * Reuses the base URL discovered from /api/config (or a same-origin
+ * fallback) and appends the ?stream=sub selector for the sub stream.
+ */
+function buildMjpegUrl(quality) {
+    const base = mjpegUrl || (window.location.origin + '/stream.mjpeg');
+    if (quality !== 'sub') {
+        return base;
+    }
+    return base + (base.includes('?') ? '&' : '?') + 'stream=sub';
 }
 
 /**
@@ -232,7 +305,7 @@ async function startNativeWebRTC(videoElement) {
         console.error('Native WebRTC error:', err);
         // Fall back to MJPEG on error
         if (nativeWebRTCAvailable) {
-            switchStream('mjpeg', 'mjpeg');
+            switchTransport('mjpeg');
         }
     }
 }
@@ -264,16 +337,17 @@ function checkStreamAvailability() {
             // Update mode indicator
             updateStreamModeIndicator();
             
-            // Configure UI based on streaming mode
+            // Configure UI based on streaming mode, then pick a default transport.
             if (streamingMode === 'go2rtc') {
                 // Full functionality available - go2rtc WebRTC is superior, disable native WebRTC
                 enableStreamButtons(['rtc', 'mjpeg']);
                 disableStreamButtons(['native_rtc'], 'go2rtc WebRTC is active (better performance)');
+                switchTransport('rtc');
             } else if (streamingMode === 'native_webrtc') {
                 // Native WebRTC mode - disable go2rtc buttons, default to MJPEG (faster start)
                 disableStreamButtons(['rtc'], 'go2rtc WebRTC unavailable');
                 enableStreamButtons(['native_rtc', 'mjpeg']);
-                switchStream('mjpeg', 'mjpeg');
+                switchTransport('mjpeg');
             } else {
                 // MJPEG-only mode
                 disableStreamButtons(['rtc'], 'WebRTC unavailable - go2rtc not running');
@@ -282,7 +356,7 @@ function checkStreamAvailability() {
                 } else {
                     disableStreamButtons(['native_rtc'], 'Install aiortc for native WebRTC');
                 }
-                switchStream('mjpeg', 'mjpeg');
+                switchTransport('mjpeg');
             }
         })
         .catch(err => console.error('Failed to check stream availability:', err));
@@ -320,42 +394,88 @@ function updateStreamModeIndicator() {
     const indicator = document.getElementById('stream-mode-indicator');
     if (!indicator) return;
     
-    // Show what the user is currently viewing
-    if (currentStreamType === 'mjpeg' || currentStream === 'mjpeg') {
+    // Show what the user is currently viewing (transport + main/sub).
+    const qualitySuffix = effectiveQuality() === 'sub' ? ' (Sub)' : '';
+
+    if (currentTransport === 'mjpeg') {
         // Differentiate between go2rtc MJPEG and native Python MJPEG
         if (streamingMode === 'go2rtc') {
-            indicator.textContent = 'go2rtc MJPEG';
+            indicator.textContent = 'go2rtc MJPEG' + qualitySuffix;
             indicator.className = 'stream-mode-indicator mode-go2rtc';
             indicator.title = 'Viewing go2rtc MJPEG stream';
         } else {
-            indicator.textContent = 'Python Native MJPEG';
+            indicator.textContent = 'Python Native MJPEG' + qualitySuffix;
             indicator.className = 'stream-mode-indicator mode-mjpeg';
             indicator.title = 'Viewing Python native MJPEG stream';
         }
-    } else if (currentStreamType === 'native_rtc') {
+    } else if (currentTransport === 'native_rtc') {
         indicator.textContent = 'Python Native WebRTC';
         indicator.className = 'stream-mode-indicator mode-native-webrtc';
         indicator.title = 'Viewing Python native WebRTC stream (aiortc)';
-    } else if (currentStreamType === 'rtc') {
-        indicator.textContent = 'go2rtc WebRTC';
+    } else {  // 'rtc'
+        indicator.textContent = 'go2rtc WebRTC' + qualitySuffix;
         indicator.className = 'stream-mode-indicator mode-go2rtc';
         indicator.title = 'Viewing go2rtc WebRTC stream';
-    } else {
-        // Default based on server mode
-        if (streamingMode === 'go2rtc') {
-            indicator.textContent = 'go2rtc';
-            indicator.className = 'stream-mode-indicator mode-go2rtc';
-            indicator.title = 'Full streaming available (RTSP/WebRTC/MJPEG)';
-        } else if (streamingMode === 'native_webrtc') {
-            indicator.textContent = 'Python Native WebRTC';
-            indicator.className = 'stream-mode-indicator mode-native-webrtc';
-            indicator.title = 'Python native WebRTC mode - RTSP unavailable';
-        } else {
-            indicator.textContent = 'Python Native MJPEG';
-            indicator.className = 'stream-mode-indicator mode-mjpeg';
-            indicator.title = 'Python native MJPEG only - go2rtc/aiortc not available';
-        }
     }
+}
+
+/**
+ * Update the small resolution readout next to the stream mode indicator.
+ * The preview is CSS-scaled to fit its container, so switching Main/Sub
+ * doesn't visibly change on screen -- this surfaces the actual served
+ * dimensions (MJPEG <img> naturalWidth, or WebRTC <video> videoWidth) so
+ * the toggle is observable. `label` is the transport name shown (e.g.
+ * 'MJPEG' / 'WebRTC'). Not shown for the go2rtc iframe (unreadable).
+ */
+function updateResolutionIndicator(width, height, label) {
+    const el = document.getElementById('resolution-indicator');
+    if (!el) return;
+
+    if (!width || !height) {
+        el.style.display = 'none';
+        return;
+    }
+
+    const qualityLabel = effectiveQuality() === 'sub' ? 'Sub' : 'Main';
+    el.textContent = `${label} ${width}×${height} (${qualityLabel})`;
+    el.style.display = '';
+}
+
+/**
+ * Hide the resolution readout immediately (e.g. while a new frame is loading,
+ * or after switching transport) so it doesn't show a stale resolution until
+ * the new frame's metadata loads.
+ */
+function clearResolutionIndicator() {
+    const el = document.getElementById('resolution-indicator');
+    if (el) el.style.display = 'none';
+}
+
+/**
+ * Local recording control (step 4.4). Toggles POST /api/recording/start and
+ * /api/recording/stop; the button's live state is otherwise kept in sync by
+ * updateStats() reading the /api/stats "recording" block.
+ */
+let isRecording = false;
+
+function toggleRecording() {
+    const endpoint = isRecording ? '/api/recording/stop' : '/api/recording/start';
+    const btn = document.getElementById('record-btn');
+    if (btn) btn.disabled = true;
+    fetch(endpoint, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => { updateRecordingButton(data.recording); })
+        .catch(err => console.error('Recording error:', err))
+        .finally(() => { if (btn) btn.disabled = false; });
+}
+
+function updateRecordingButton(recording) {
+    isRecording = Boolean(recording);
+    const btn = document.getElementById('record-btn');
+    if (!btn) return;
+    btn.textContent = isRecording ? '■ Stop' : '● REC';
+    btn.classList.toggle('recording-active', isRecording);
+    btn.title = isRecording ? 'Recording -- click to stop' : 'Start local recording';
 }
 
 /**
@@ -413,12 +533,12 @@ function updateStats() {
             // Show stats based on what the user is currently viewing
             let fps, frames, uptime;
             
-            if (currentStreamType === 'mjpeg') {
+            if (currentTransport === 'mjpeg') {
                 // Viewing MJPEG - show MJPEG stats
                 fps = data.mjpeg_fps ?? data.actual_fps ?? '-';
                 frames = data.mjpeg_frames_sent ?? data.frames_sent ?? '-';
                 uptime = data.mjpeg_elapsed_time ?? data.elapsed_time;
-            } else if (currentStreamType === 'native_rtc') {
+            } else if (currentTransport === 'native_rtc') {
                 // Viewing native WebRTC - show WebRTC stats
                 fps = data.webrtc_fps ?? data.actual_fps ?? '-';
                 frames = data.webrtc_frames_sent ?? data.frames_sent ?? '-';
@@ -441,6 +561,11 @@ function updateStats() {
                 streamingMode = data.streaming_mode;
                 updateStreamModeIndicator();
             }
+
+            // Reflect recorder state on the record button.
+            if (data.recording) {
+                updateRecordingButton(data.recording.recording);
+            }
         })
         .catch(err => {
             console.error('Failed to fetch stats:', err);
@@ -449,60 +574,302 @@ function updateStats() {
 }
 
 /**
- * Apply configuration changes
+ * Paged settings (step 4.3): Display / Stream / Identity / User tabs.
+ *
+ * Each tab is a plain CSS-toggled panel (see .tab-btn/.tab-panel in
+ * style.css). Every editable field is declared once in SETTINGS_FIELDS so
+ * loading, saving, and validating a tab all walk the same list instead of
+ * three separate hand-written field lists getting out of sync.
  */
-function applyConfig() {
-    const mainRes = document.getElementById('main_res').value.split('x');
-    const subRes = document.getElementById('sub_res').value.split('x');
-    
-    const config = {
-        main_width: parseInt(mainRes[0]),
-        main_height: parseInt(mainRes[1]),
-        main_fps: parseInt(document.getElementById('main_fps').value),
-        main_bitrate: document.getElementById('main_bitrate').value,
-        sub_width: parseInt(subRes[0]),
-        sub_height: parseInt(subRes[1]),
-        sub_bitrate: document.getElementById('sub_bitrate').value,
-        hw_accel: document.getElementById('hw_accel').value,
-        show_timestamp: document.getElementById('show_timestamp').checked,
-        timestamp_position: document.getElementById('timestamp_position').value
-    };
-    
-    const statusEl = document.getElementById('apply-status');
-    statusEl.textContent = 'Saving...';
-    
+const SETTINGS_FIELDS = {
+    display: [
+        { id: 'disp_flip', key: 'flip', type: 'checkbox' },
+        { id: 'disp_mirror', key: 'mirror', type: 'checkbox' },
+        { id: 'disp_rotation', key: 'rotation', type: 'int' },
+        { id: 'disp_show_timestamp', key: 'show_timestamp', type: 'checkbox' },
+        { id: 'disp_timestamp_format', key: 'timestamp_format', type: 'text' },
+        { id: 'disp_timestamp_position', key: 'timestamp_position', type: 'text' },
+    ],
+    stream: [
+        { id: 'stream_main_width', key: 'main_width', type: 'int' },
+        { id: 'stream_main_height', key: 'main_height', type: 'int' },
+        { id: 'stream_main_fps', key: 'main_fps', type: 'int' },
+        { id: 'stream_main_bitrate', key: 'main_bitrate', type: 'text' },
+        { id: 'stream_main_stream_name', key: 'main_stream_name', type: 'text' },
+        { id: 'stream_sub_width', key: 'sub_width', type: 'int' },
+        { id: 'stream_sub_height', key: 'sub_height', type: 'int' },
+        { id: 'stream_sub_fps', key: 'sub_fps', type: 'int' },
+        { id: 'stream_sub_bitrate', key: 'sub_bitrate', type: 'text' },
+        { id: 'stream_sub_stream_name', key: 'sub_stream_name', type: 'text' },
+        { id: 'stream_hw_accel', key: 'hw_accel', type: 'text' },
+    ],
+    identity: [
+        { id: 'ident_name', key: 'name', type: 'text' },
+        { id: 'ident_manufacturer', key: 'manufacturer', type: 'text' },
+        { id: 'ident_model', key: 'model', type: 'text' },
+    ],
+};
+
+// Display-only fields: rendered disabled, never sent on save (ports and
+// serial/firmware are not in EDITABLE_FIELDS -- see ipycam/config.py).
+const READONLY_FIELDS = [
+    { id: 'stream_onvif_port', key: 'onvif_port' },
+    { id: 'stream_rtsp_port', key: 'rtsp_port' },
+    { id: 'stream_rtmp_port', key: 'rtmp_port' },
+    { id: 'stream_go2rtc_api_port', key: 'go2rtc_api_port' },
+    { id: 'ident_serial_number', key: 'serial_number' },
+    { id: 'ident_firmware_version', key: 'firmware_version' },
+];
+
+// Client-side mirrors of the server-side rules in CameraConfig._validate_update.
+// These exist only for a nicer UX (catch obvious mistakes before the round
+// trip) -- apply_updates() on the server is always the source of truth and
+// re-validates every field regardless of what passes here.
+const VALID_ROTATIONS = [0, 90, 180, 270];
+const VALID_HW_ACCEL = ['auto', 'nvenc', 'qsv', 'cpu'];
+const VALID_TIMESTAMP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+const BITRATE_RE = /^\d+[KMG]?$/;
+const MIN_FPS = 1, MAX_FPS = 120;
+const MAX_WIDTH = 7680, MAX_HEIGHT = 4320;
+
+/**
+ * Switch the visible settings tab. Toggles .active on both the tab button
+ * and its matching panel; does not touch PTZ/preview/stats, which live
+ * outside the settings card.
+ */
+function switchSettingsTab(tab) {
+    document.querySelectorAll('#settings-tabs .tab-btn').forEach(btn => {
+        const isActive = btn.dataset.tab === tab;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', String(isActive));
+    });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.tabPanel === tab);
+    });
+}
+
+function setFieldValue(field, value) {
+    const el = document.getElementById(field.id);
+    if (!el) return;
+    if (field.type === 'checkbox') {
+        el.checked = Boolean(value);
+    } else if (el.tagName === 'SELECT') {
+        for (const opt of el.options) {
+            opt.selected = String(opt.value) === String(value);
+        }
+    } else {
+        el.value = (value === undefined || value === null) ? '' : value;
+    }
+}
+
+function getFieldValue(field) {
+    const el = document.getElementById(field.id);
+    if (!el) return undefined;
+    if (field.type === 'checkbox') return el.checked;
+    if (field.type === 'int') {
+        const n = parseInt(el.value, 10);
+        return Number.isNaN(n) ? el.value : n;
+    }
+    return el.value;
+}
+
+/**
+ * Populate every settings tab (editable + read-only fields, and the User
+ * tab's auth-state banner + username) from the /api/config payload. Called
+ * from loadConfig() so the tabs stay in sync with whatever the rest of the
+ * page already fetched -- no separate request.
+ */
+function populateSettingsForm(config) {
+    Object.values(SETTINGS_FIELDS).flat().forEach(field => {
+        setFieldValue(field, config[field.key]);
+    });
+
+    READONLY_FIELDS.forEach(field => {
+        const el = document.getElementById(field.id);
+        if (el) el.value = (config[field.key] === undefined || config[field.key] === null) ? '' : config[field.key];
+    });
+
+    const authValueEl = document.getElementById('auth-state-value');
+    if (authValueEl) {
+        authValueEl.textContent = config.auth_enabled ? 'Enabled' : 'Disabled';
+        authValueEl.style.color = config.auth_enabled ? '#00ff88' : '#888';
+    }
+    // Prefill the username (never the password -- the server never sends it).
+    const usernameEl = document.getElementById('user_username');
+    if (usernameEl && document.activeElement !== usernameEl) {
+        usernameEl.value = config.username || '';
+    }
+}
+
+/**
+ * Client-side validation mirroring CameraConfig._validate_update. Returns a
+ * list of human-readable error strings (empty = passes).
+ */
+function validateTabFields(tab, values) {
+    const errors = [];
+    if (tab === 'display') {
+        if (!VALID_ROTATIONS.includes(values.rotation)) errors.push('rotation must be 0, 90, 180, or 270');
+        if (!VALID_TIMESTAMP_POSITIONS.includes(values.timestamp_position)) errors.push('invalid timestamp position');
+        if (!values.timestamp_format || !String(values.timestamp_format).trim()) errors.push('timestamp format cannot be empty');
+    } else if (tab === 'stream') {
+        if (!(values.main_width >= 1 && values.main_width <= MAX_WIDTH)) errors.push('main width out of range');
+        if (!(values.main_height >= 1 && values.main_height <= MAX_HEIGHT)) errors.push('main height out of range');
+        if (!(values.main_fps >= MIN_FPS && values.main_fps <= MAX_FPS)) errors.push('main fps out of range');
+        if (!BITRATE_RE.test(values.main_bitrate)) errors.push('main bitrate format invalid (e.g. 8M, 512K)');
+        if (!(values.sub_width >= 1 && values.sub_width <= MAX_WIDTH)) errors.push('sub width out of range');
+        if (!(values.sub_height >= 1 && values.sub_height <= MAX_HEIGHT)) errors.push('sub height out of range');
+        if (!(values.sub_fps >= MIN_FPS && values.sub_fps <= MAX_FPS)) errors.push('sub fps out of range');
+        if (!BITRATE_RE.test(values.sub_bitrate)) errors.push('sub bitrate format invalid (e.g. 1M, 512K)');
+        if (!VALID_HW_ACCEL.includes(values.hw_accel)) errors.push('invalid hardware acceleration option');
+        if (!values.main_stream_name || !String(values.main_stream_name).trim()) errors.push('main stream name cannot be empty');
+        if (!values.sub_stream_name || !String(values.sub_stream_name).trim()) errors.push('sub stream name cannot be empty');
+    } else if (tab === 'identity') {
+        if (!values.name || !String(values.name).trim()) errors.push('name cannot be empty');
+        if (!values.manufacturer || !String(values.manufacturer).trim()) errors.push('manufacturer cannot be empty');
+        if (!values.model || !String(values.model).trim()) errors.push('model cannot be empty');
+    }
+    return errors;
+}
+
+/**
+ * Render the /api/config POST response (applied/rejected/restart_needed)
+ * into a tab's inline status line, then clear it after a few seconds.
+ */
+function reportSettingsResult(statusEl, data) {
+    if (!statusEl) return;
+    if (data.success) {
+        let msg = '';
+        if (data.applied && data.applied.length) {
+            msg += `Saved: ${data.applied.join(', ')}. `;
+        }
+        if (data.rejected && data.rejected.length) {
+            msg += `Rejected: ${data.rejected.join(', ')}. `;
+        }
+        if (data.restart_needed) {
+            msg += data.restarted ? 'Stream restarted.' : 'Stream restarting...';
+        }
+        statusEl.textContent = msg.trim() || 'Saved!';
+        statusEl.style.color = (data.rejected && data.rejected.length) ? '#ffaa00' : '#00ff88';
+    } else {
+        statusEl.textContent = 'Error: ' + (data.error || 'unknown error');
+        statusEl.style.color = '#e94560';
+    }
+    setTimeout(() => {
+        statusEl.textContent = '';
+        statusEl.style.color = '#888';
+    }, 5000);
+}
+
+/**
+ * Collect and save one settings tab's editable fields via the existing
+ * /api/config endpoint (CameraConfig.apply_updates). Only that tab's own
+ * fields are sent -- e.g. saving Display never touches stream/identity
+ * fields -- and credentials are never included here (see saveCredentials).
+ */
+function saveSettingsTab(tab) {
+    const fields = SETTINGS_FIELDS[tab];
+    if (!fields) return;
+
+    const values = {};
+    fields.forEach(field => { values[field.key] = getFieldValue(field); });
+
+    const statusEl = document.getElementById(`status-${tab}`);
+    const errors = validateTabFields(tab, values);
+    if (errors.length > 0) {
+        if (statusEl) {
+            statusEl.textContent = 'Fix: ' + errors.join('; ');
+            statusEl.style.color = '#e94560';
+        }
+        return;
+    }
+
+    if (statusEl) {
+        statusEl.textContent = 'Saving...';
+        statusEl.style.color = '#888';
+    }
+
     fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify(values)
     })
     .then(r => r.json())
-    .then(data => {
-        if (data.success) {
-            if (data.restarted) {
-                statusEl.textContent = 'Applied! Stream restarted.';
-            } else if (data.restart_needed) {
-                statusEl.textContent = 'Saved! Stream restart failed.';
-                statusEl.style.color = '#ffaa00';
-            } else {
-                statusEl.textContent = 'Saved!';
+    .then(data => reportSettingsResult(statusEl, data))
+    .catch(err => {
+        if (statusEl) {
+            statusEl.textContent = 'Error: ' + err.message;
+            statusEl.style.color = '#e94560';
+        }
+    });
+}
+
+/**
+ * Save (or clear) the HTTP Basic auth credential pair via the dedicated
+ * /api/credentials endpoint. username/password are deliberately NOT part of
+ * SETTINGS_FIELDS/apply_updates -- see CameraConfig.set_credentials.
+ */
+function saveCredentials() {
+    const username = document.getElementById('user_username').value;
+    const password = document.getElementById('user_password').value;
+    const confirmPassword = document.getElementById('user_password_confirm').value;
+    const statusEl = document.getElementById('status-user');
+
+    // Client-side checks for UX only -- the server re-validates (e.g. empty
+    // username with a non-empty password is rejected) and is authoritative.
+    if (password !== confirmPassword) {
+        if (statusEl) {
+            statusEl.textContent = 'Passwords do not match';
+            statusEl.style.color = '#e94560';
+        }
+        return;
+    }
+    if ((username && !password) || (!username && password)) {
+        if (statusEl) {
+            statusEl.textContent = 'Both username and password are required (or leave both blank to disable auth)';
+            statusEl.style.color = '#e94560';
+        }
+        return;
+    }
+
+    if (statusEl) {
+        statusEl.textContent = 'Saving...';
+        statusEl.style.color = '#888';
+    }
+
+    fetch('/api/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password })
+    })
+    .then(r => r.json().then(data => ({ ok: r.ok, data })))
+    .then(({ ok, data }) => {
+        if (ok && data.success) {
+            const authValueEl = document.getElementById('auth-state-value');
+            if (authValueEl) {
+                authValueEl.textContent = data.auth_enabled ? 'Enabled' : 'Disabled';
+                authValueEl.style.color = data.auth_enabled ? '#00ff88' : '#888';
             }
-            if (!data.restart_needed || data.restarted) {
+            // Never keep the password in the DOM/memory longer than needed.
+            document.getElementById('user_password').value = '';
+            document.getElementById('user_password_confirm').value = '';
+            if (statusEl) {
+                statusEl.textContent = data.auth_enabled
+                    ? 'Credentials saved. Auth enabled -- you may be prompted to log in.'
+                    : 'Credentials cleared. Auth disabled.';
                 statusEl.style.color = '#00ff88';
             }
         } else {
-            statusEl.textContent = 'Error: ' + data.error;
-            statusEl.style.color = '#e94560';
+            if (statusEl) {
+                statusEl.textContent = 'Error: ' + (data.error || 'unknown error');
+                statusEl.style.color = '#e94560';
+            }
         }
-        // Reset status after 3 seconds
-        setTimeout(() => {
-            statusEl.textContent = '';
-            statusEl.style.color = '#888';
-        }, 3000);
     })
     .catch(err => {
-        statusEl.textContent = 'Error: ' + err.message;
-        statusEl.style.color = '#e94560';
+        if (statusEl) {
+            statusEl.textContent = 'Error: ' + err.message;
+            statusEl.style.color = '#e94560';
+        }
     });
 }
 
@@ -513,47 +880,9 @@ function loadConfig() {
     fetch('/api/config')
         .then(r => r.json())
         .then(config => {
-            // Update form values based on current config
-            const mainResSelect = document.getElementById('main_res');
-            const mainRes = `${config.main_width}x${config.main_height}`;
-            for (let opt of mainResSelect.options) {
-                opt.selected = opt.value === mainRes;
-            }
-            
-            const mainFpsSelect = document.getElementById('main_fps');
-            for (let opt of mainFpsSelect.options) {
-                opt.selected = opt.value === String(config.main_fps);
-            }
-            
-            const mainBitrateSelect = document.getElementById('main_bitrate');
-            for (let opt of mainBitrateSelect.options) {
-                opt.selected = opt.value === config.main_bitrate;
-            }
-            
-            const subResSelect = document.getElementById('sub_res');
-            const subRes = `${config.sub_width}x${config.sub_height}`;
-            for (let opt of subResSelect.options) {
-                opt.selected = opt.value === subRes;
-            }
-            
-            const subBitrateSelect = document.getElementById('sub_bitrate');
-            for (let opt of subBitrateSelect.options) {
-                opt.selected = opt.value === config.sub_bitrate;
-            }
-            
-            const hwAccelSelect = document.getElementById('hw_accel');
-            for (let opt of hwAccelSelect.options) {
-                opt.selected = opt.value === config.hw_accel;
-            }
-            
-            // Overlay settings
-            document.getElementById('show_timestamp').checked = config.show_timestamp !== false;
-            
-            const timestampPosSelect = document.getElementById('timestamp_position');
-            for (let opt of timestampPosSelect.options) {
-                opt.selected = opt.value === config.timestamp_position;
-            }
-            
+            // Populate the Display/Stream/Identity/User settings tabs (step 4.3).
+            populateSettingsForm(config);
+
             // Video upload mode
             videoUploadMode = config.video_upload_mode || false;
             const isVideoSource = config.source_type === 'video_file';
@@ -787,7 +1116,27 @@ let lastVideoError = null;
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    // Check stream availability first (may switch to MJPEG mode)
+    // Wire the resolution readout once; the handlers persist across src
+    // reassignments so every loaded frame reports its actual dimensions.
+    // Each only reports while its own transport is the active preview.
+    const mjpegImgEl = document.getElementById('preview-mjpeg');
+    if (mjpegImgEl) {
+        mjpegImgEl.onload = () => {
+            if (currentTransport === 'mjpeg') {
+                updateResolutionIndicator(mjpegImgEl.naturalWidth, mjpegImgEl.naturalHeight, 'MJPEG');
+            }
+        };
+    }
+    const nativeVideoEl = document.getElementById('preview-native-rtc');
+    if (nativeVideoEl) {
+        nativeVideoEl.addEventListener('loadedmetadata', () => {
+            if (currentTransport === 'native_rtc') {
+                updateResolutionIndicator(nativeVideoEl.videoWidth, nativeVideoEl.videoHeight, 'WebRTC');
+            }
+        });
+    }
+
+    // Check stream availability first (sets button availability + default transport)
     checkStreamAvailability();
     
     // Start stats update interval

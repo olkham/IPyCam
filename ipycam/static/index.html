@@ -18,13 +18,27 @@
                     <video id="preview-native-rtc" autoplay playsinline muted style="display: none; width: 100%; height: 700px; object-fit: contain; background: #1a1a2e;"></video>
                 </div>
                 <div class="preview-toolbar">
-                    <div class="stream-switcher">
-                        <button class="btn-stream active" data-stream="main" data-type="rtc" onclick="switchStream('main', 'rtc')">Main</button>
-                        <button class="btn-stream" data-stream="sub" data-type="rtc" onclick="switchStream('sub', 'rtc')">Sub</button>
-                        <button class="btn-stream" data-stream="main" data-type="native_rtc" onclick="switchStream('main', 'native_rtc')" title="Python Native WebRTC (aiortc)">WebRTC</button>
-                        <button class="btn-stream" data-stream="mjpeg" data-type="mjpeg" onclick="switchStream('mjpeg', 'mjpeg')">MJPEG</button>
+                    <!-- Transport selector: which player/protocol the preview uses. -->
+                    <div class="stream-switcher" id="transport-switcher" title="Preview transport">
+                        <button class="btn-stream active" data-type="rtc" onclick="switchTransport('rtc')" title="go2rtc WebRTC (best quality)">go2rtc</button>
+                        <button class="btn-stream" data-type="native_rtc" onclick="switchTransport('native_rtc')" title="Python Native WebRTC (aiortc)">WebRTC</button>
+                        <button class="btn-stream" data-type="mjpeg" onclick="switchTransport('mjpeg')" title="Native MJPEG (widest compatibility)">MJPEG</button>
+                    </div>
+                    <!-- Main/Sub stream selector; applies to the active transport.
+                         Sub is disabled by app.js for main-only transports (native WebRTC). -->
+                    <div class="stream-switcher" id="quality-switcher" title="Main / sub stream">
+                        <button class="btn-stream active" data-quality="main" onclick="switchQuality('main')">Main</button>
+                        <button class="btn-stream" data-quality="sub" onclick="switchQuality('sub')">Sub</button>
                     </div>
                     <div id="stream-mode-indicator" class="stream-mode-indicator"></div>
+                    <!-- Actual served resolution of the active preview (main/sub), read from
+                         the MJPEG <img> naturalWidth or the WebRTC <video> videoWidth by app.js.
+                         Hidden for the go2rtc iframe (cross-origin, not readable). -->
+                    <div id="resolution-indicator" class="stream-mode-indicator resolution-indicator" style="display: none;" title="Actual resolution of the active preview as served"></div>
+                    <!-- Local recording toggle (step 4.4). State/label driven
+                         by /api/stats -> recording via app.js. -->
+                    <button type="button" class="btn-stream btn-record" id="record-btn"
+                            onclick="toggleRecording()" title="Start/stop local recording">● REC</button>
                 </div>
                 <div class="stats">
                     <div class="stat">
@@ -102,83 +116,202 @@
                     <div><span>MJPEG:</span> <a href="{{mjpeg_url}}" target="_blank" id="mjpeg-url">{{mjpeg_url}}</a></div>
                 </div>
                 
-                <h2>Main Stream</h2>
-                <div class="inline">
-                    <div class="form-group">
-                        <label>Resolution</label>
-                        <select id="main_res">
-                            <option value="1920x1080">1920x1080</option>
-                            <option value="1280x720">1280x720</option>
-                            <option value="640x480">640x480</option>
-                        </select>
+                <h2>Settings</h2>
+                <div class="tabs" id="settings-tabs" role="tablist">
+                    <button type="button" class="tab-btn active" data-tab="display" role="tab" aria-selected="true" onclick="switchSettingsTab('display')">Display</button>
+                    <button type="button" class="tab-btn" data-tab="stream" role="tab" aria-selected="false" onclick="switchSettingsTab('stream')">Stream</button>
+                    <button type="button" class="tab-btn" data-tab="identity" role="tab" aria-selected="false" onclick="switchSettingsTab('identity')">Identity</button>
+                    <button type="button" class="tab-btn" data-tab="user" role="tab" aria-selected="false" onclick="switchSettingsTab('user')">User</button>
+                </div>
+
+                <!-- Display tab: flip/mirror/rotation (step 4.1) + timestamp overlay -->
+                <div class="tab-panel active" data-tab-panel="display" id="tab-display">
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="disp_flip">
+                            <span>Flip (upside-down)</span>
+                        </label>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="disp_mirror">
+                            <span>Mirror (horizontal)</span>
+                        </label>
                     </div>
                     <div class="form-group">
-                        <label>FPS</label>
-                        <select id="main_fps">
-                            <option value="60">60</option>
-                            <option value="30">30</option>
-                            <option value="15">15</option>
+                        <label>Rotation</label>
+                        <select id="disp_rotation">
+                            <option value="0">0°</option>
+                            <option value="90">90°</option>
+                            <option value="180">180°</option>
+                            <option value="270">270°</option>
                         </select>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label>Bitrate</label>
-                    <select id="main_bitrate">
-                        <option value="8M">8 Mbps</option>
-                        <option value="4M">4 Mbps</option>
-                        <option value="2M">2 Mbps</option>
-                        <option value="1M">1 Mbps</option>
-                    </select>
-                </div>
-                
-                <h2>Sub Stream</h2>
-                <div class="inline">
-                    <div class="form-group">
-                        <label>Resolution</label>
-                        <select id="sub_res">
-                            <option value="640x480">640x480</option>
-                            <option value="320x240">320x240</option>
-                        </select>
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="disp_show_timestamp">
+                            <span>Show Timestamp</span>
+                        </label>
                     </div>
                     <div class="form-group">
-                        <label>Bitrate</label>
-                        <select id="sub_bitrate">
-                            <option value="1M">1 Mbps</option>
-                            <option value="512K">512 Kbps</option>
+                        <label>Timestamp Format</label>
+                        <input type="text" id="disp_timestamp_format" placeholder="%Y-%m-%d %H:%M:%S">
+                    </div>
+                    <div class="form-group">
+                        <label>Timestamp Position</label>
+                        <select id="disp_timestamp_position">
+                            <option value="bottom-left">Bottom Left</option>
+                            <option value="bottom-right">Bottom Right</option>
+                            <option value="top-left">Top Left</option>
+                            <option value="top-right">Top Right</option>
                         </select>
                     </div>
+                    <button class="btn" onclick="saveSettingsTab('display')">Save Display Settings</button>
+                    <span class="settings-status" id="status-display"></span>
                 </div>
-                
-                <h2>Encoder</h2>
-                <div class="form-group">
-                    <label>Hardware Acceleration</label>
-                    <select id="hw_accel">
-                        <option value="auto">Auto</option>
-                        <option value="nvenc">NVENC (NVIDIA)</option>
-                        <option value="qsv">QSV (Intel)</option>
-                        <option value="cpu">CPU</option>
-                    </select>
+
+                <!-- Stream/Network tab: main/sub encode params + read-only ports -->
+                <div class="tab-panel" data-tab-panel="stream" id="tab-stream">
+                    <h3>Main Stream</h3>
+                    <div class="inline">
+                        <div class="form-group">
+                            <label>Width</label>
+                            <input type="number" id="stream_main_width" min="1" max="7680">
+                        </div>
+                        <div class="form-group">
+                            <label>Height</label>
+                            <input type="number" id="stream_main_height" min="1" max="4320">
+                        </div>
+                    </div>
+                    <div class="inline">
+                        <div class="form-group">
+                            <label>FPS</label>
+                            <input type="number" id="stream_main_fps" min="1" max="120">
+                        </div>
+                        <div class="form-group">
+                            <label>Bitrate</label>
+                            <input type="text" id="stream_main_bitrate" placeholder="8M">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Stream Name</label>
+                        <input type="text" id="stream_main_stream_name">
+                    </div>
+
+                    <h3>Sub Stream</h3>
+                    <div class="inline">
+                        <div class="form-group">
+                            <label>Width</label>
+                            <input type="number" id="stream_sub_width" min="1" max="7680">
+                        </div>
+                        <div class="form-group">
+                            <label>Height</label>
+                            <input type="number" id="stream_sub_height" min="1" max="4320">
+                        </div>
+                    </div>
+                    <div class="inline">
+                        <div class="form-group">
+                            <label>FPS</label>
+                            <input type="number" id="stream_sub_fps" min="1" max="120">
+                        </div>
+                        <div class="form-group">
+                            <label>Bitrate</label>
+                            <input type="text" id="stream_sub_bitrate" placeholder="1M">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Stream Name</label>
+                        <input type="text" id="stream_sub_stream_name">
+                    </div>
+
+                    <h3>Encoder</h3>
+                    <div class="form-group">
+                        <label>Hardware Acceleration</label>
+                        <select id="stream_hw_accel">
+                            <option value="auto">Auto</option>
+                            <option value="nvenc">NVENC (NVIDIA)</option>
+                            <option value="qsv">QSV (Intel)</option>
+                            <option value="cpu">CPU</option>
+                        </select>
+                    </div>
+
+                    <h3>Ports <span class="readonly-tag">read-only</span></h3>
+                    <div class="inline">
+                        <div class="form-group">
+                            <label>ONVIF Port</label>
+                            <input type="text" id="stream_onvif_port" disabled>
+                        </div>
+                        <div class="form-group">
+                            <label>RTSP Port</label>
+                            <input type="text" id="stream_rtsp_port" disabled>
+                        </div>
+                    </div>
+                    <div class="inline">
+                        <div class="form-group">
+                            <label>RTMP Port</label>
+                            <input type="text" id="stream_rtmp_port" disabled>
+                        </div>
+                        <div class="form-group">
+                            <label>go2rtc API Port</label>
+                            <input type="text" id="stream_go2rtc_api_port" disabled>
+                        </div>
+                    </div>
+
+                    <button class="btn" onclick="saveSettingsTab('stream')">Save Stream Settings</button>
+                    <span class="settings-status" id="status-stream"></span>
                 </div>
-                
-                <h2>Overlay</h2>
-                <div class="form-group checkbox-group">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="show_timestamp" checked>
-                        <span>Show Timestamp</span>
-                    </label>
+
+                <!-- Identity tab: editable name/manufacturer/model + read-only serial/firmware -->
+                <div class="tab-panel" data-tab-panel="identity" id="tab-identity">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="ident_name">
+                    </div>
+                    <div class="form-group">
+                        <label>Manufacturer</label>
+                        <input type="text" id="ident_manufacturer">
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <input type="text" id="ident_model">
+                    </div>
+                    <div class="form-group">
+                        <label>Serial Number <span class="readonly-tag">read-only</span></label>
+                        <input type="text" id="ident_serial_number" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Firmware Version <span class="readonly-tag">read-only</span></label>
+                        <input type="text" id="ident_firmware_version" disabled>
+                    </div>
+                    <button class="btn" onclick="saveSettingsTab('identity')">Save Identity</button>
+                    <span class="settings-status" id="status-identity"></span>
                 </div>
-                <div class="form-group">
-                    <label>Position</label>
-                    <select id="timestamp_position">
-                        <option value="bottom-left">Bottom Left</option>
-                        <option value="bottom-right">Bottom Right</option>
-                        <option value="top-left">Top Left</option>
-                        <option value="top-right">Top Right</option>
-                    </select>
+
+                <!-- User tab: credentials via the dedicated /api/credentials endpoint
+                     (username/password are intentionally excluded from the generic
+                     /api/config path -- see CameraConfig EDITABLE_FIELDS). -->
+                <div class="tab-panel" data-tab-panel="user" id="tab-user">
+                    <div class="auth-state">Authentication: <strong id="auth-state-value">-</strong></div>
+                    <p class="settings-hint">
+                        Setting a username and password enables HTTP Basic auth for the web UI
+                        and ONVIF. Once enabled, this page may prompt for a login on next load.
+                        Clear both fields and save to disable auth again.
+                    </p>
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="user_username" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="user_password" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm Password</label>
+                        <input type="password" id="user_password_confirm" autocomplete="new-password">
+                    </div>
+                    <button class="btn" onclick="saveCredentials()">Save Credentials</button>
+                    <span class="settings-status" id="status-user"></span>
                 </div>
-                
-                <button class="btn" onclick="applyConfig()">Apply Changes</button>
-                <span id="apply-status" style="margin-left: 10px; color: #888;"></span>
             </div>
         </div>
         

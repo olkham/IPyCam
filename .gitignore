@@ -87,6 +87,7 @@ dmypy.json
 # camera_config.json
 ptz_presets.json
 pypi_steps.md
+/todo
 
 # video files
 *.mp4

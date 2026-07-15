@@ -14,10 +14,16 @@ Examples:
 """
 
 import argparse
+import logging
 import os
 import platform
 import cv2
-from . import IPCamera, CameraConfig
+from . import IPCamera, CameraConfig, configure_logging
+
+# NOTE: when run as `python -m ipycam` this module's __name__ is "__main__",
+# so name the logger explicitly to keep it inside the "ipycam" logger tree
+# that configure_logging() attaches its handler to.
+logger = logging.getLogger("ipycam.cli")
 
 
 def infer_source_type(source_arg: str) -> tuple[str, str]:
@@ -58,6 +64,38 @@ def infer_source_type(source_arg: str) -> tuple[str, str]:
     
     # Default to custom if we can't determine
     return ("custom", source_arg)
+
+
+def _open_device_capture(index: int) -> cv2.VideoCapture:
+    """Open a local capture device using the fastest backend for the platform.
+
+    On Windows, MSMF is preferred over DirectShow (DSHOW): DSHOW is noticeably
+    slow to open and to read from on many webcams. We fall back to DSHOW, then
+    OpenCV's default, if MSMF can't open the device. (The MSMF hardware-transform
+    slowdown is separately disabled via OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS,
+    set in ipycam/__init__.py before cv2 is imported.) Linux uses V4L2; other
+    platforms use OpenCV's default backend.
+    """
+    system = platform.system().lower()
+    if system == "windows":
+        candidates = [("MSMF", cv2.CAP_MSMF), ("DSHOW", cv2.CAP_DSHOW)]
+    elif system == "linux":
+        candidates = [("V4L2", cv2.CAP_V4L2)]
+    else:
+        candidates = [("default", cv2.CAP_ANY)]
+
+    cap = None
+    for name, backend in candidates:
+        cap = cv2.VideoCapture(index, backend)
+        if cap.isOpened():
+            logger.info(f"Opened camera {index} using the {name} backend")
+            return cap
+        cap.release()
+        logger.warning(f"{name} backend could not open camera {index}")
+
+    # Nothing opened; return the last attempt (or a default-backend capture) so
+    # the caller's isOpened() check reports the failure.
+    return cap if cap is not None else cv2.VideoCapture(index)
 
 
 def main():
@@ -128,9 +166,20 @@ Examples:
         default=None,
         help='Hardware acceleration: auto, nvenc, qsv, or cpu'
     )
-    
+
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        default='INFO',
+        help='Logging verbosity (default: INFO)'
+    )
+
     args = parser.parse_args()
-    
+
+    # The CLI is an application, so it configures logging for the library
+    # (the library itself stays silent-by-default via its NullHandler).
+    configure_logging(level=getattr(logging, args.log_level))
+
     # Load config from file, or use defaults if not found
     config = CameraConfig.load(args.config)
     
@@ -153,14 +202,16 @@ Examples:
     config.source_type = source_type
     config.source_info = source_info
     
-    print(f"Loaded config: {config.name} ({config.main_width}x{config.main_height}@{config.main_fps}fps)")
-    
+    logger.info(f"Loaded config: {config.name} ({config.main_width}x{config.main_height}@{config.main_fps}fps)")
+
     camera = IPCamera(config)
-    
+
     if not camera.start():
-        print("Failed to start camera")
+        logger.error("Failed to start camera")
         return 1
     
+    # Deliberate console UX (kept as print): the startup banner with the URLs
+    # the user needs, and the Ctrl+C hint. Status/diagnostics go via logging.
     print("\n" + "="*50)
     print("IP Camera is running!")
     print("="*50)
@@ -173,6 +224,7 @@ Examples:
     
     if is_video_upload_mode:
         # Video upload mode - no source file, wait for upload via web UI
+        # (deliberate console UX: user instructions shown at startup)
         print("Video upload mode - no video file specified")
         print("Upload a video file via the web UI to start streaming\n")
         camera.set_video_upload_mode(True)
@@ -184,12 +236,12 @@ Examples:
                 
                 if video_path and os.path.isfile(video_path):
                     # We have a video file to play
-                    print(f"Opening video source: {video_path}")
+                    logger.info(f"Opening video source: {video_path}")
                     # Use auto backend for file paths (V4L2/DSHOW are for device indices only)
                     cap = cv2.VideoCapture(video_path)
-                    
+
                     if not cap.isOpened():
-                        print(f"Error: Could not open video: {video_path}")
+                        logger.error(f"Error: Could not open video: {video_path}")
                         camera.notify_video_error(f"Could not open video: {os.path.basename(video_path)}")
                         import time
                         time.sleep(0.5)
@@ -209,7 +261,7 @@ Examples:
                         camera.stream(frame)
                     
                     cap.release()
-                    print(f"Video source closed: {video_path}")
+                    logger.info(f"Video source closed: {video_path}")
                 else:
                     # No video yet, generate a placeholder frame
                     import numpy as np
@@ -244,14 +296,14 @@ Examples:
     except ValueError:
         camera_source = args.source
     
-    print(f"Opening camera source: {camera_source}")
-    # Use auto backend for file paths; use platform backend for device indices/URLs
-    if isinstance(camera_source, str) and os.path.isfile(camera_source):
-        cap = cv2.VideoCapture(camera_source)
-    elif platform.system().lower() == "linux":
-        cap = cv2.VideoCapture(camera_source, cv2.CAP_V4L2)
+    logger.info(f"Opening camera source: {camera_source}")
+    # Local capture devices (integer index) use the best platform backend;
+    # file paths and URLs use OpenCV's default (FFmpeg) backend -- DSHOW/MSMF/V4L2
+    # are for local devices only, not rtsp:// / http:// sources.
+    if isinstance(camera_source, int):
+        cap = _open_device_capture(camera_source)
     else:
-        cap = cv2.VideoCapture(camera_source, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(camera_source)
     
     # Set resolution if using webcam (device index)
     if isinstance(camera_source, int):
@@ -271,7 +323,7 @@ Examples:
         camera.set_current_video_path(os.path.abspath(args.source))
     
     if not cap.isOpened():
-        print(f"Error: Could not open camera source: {camera_source}")
+        logger.error(f"Error: Could not open camera source: {camera_source}")
         camera.stop()
         return 1
     
@@ -284,12 +336,12 @@ Examples:
                 
                 if new_video and new_video != current_source:
                     # Video source changed - switch to new video
-                    print(f"Switching to new video: {new_video}")
+                    logger.info(f"Switching to new video: {new_video}")
                     cap.release()
                     cap = cv2.VideoCapture(new_video)
-                    
+
                     if not cap.isOpened():
-                        print(f"Error: Could not open new video: {new_video}")
+                        logger.error(f"Error: Could not open new video: {new_video}")
                         camera.notify_video_error(f"Could not open video: {os.path.basename(new_video)}")
                         # Revert to previous video
                         if current_source and os.path.isfile(current_source):
@@ -308,7 +360,7 @@ Examples:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
                 else:
-                    print("Error: Failed to read from camera")
+                    logger.error("Error: Failed to read from camera")
                     break
             
             # Stream handles PTZ, timestamp, and frame pacing automatically

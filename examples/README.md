@@ -6,7 +6,7 @@ This folder contains example scripts demonstrating various ways to use IPyCam.
 
 Install IPyCam:
 ```bash
-pip install ipycam
+pip install git+https://github.com/olkham/IPyCam.git
 ```
 
 Or from source:
@@ -14,6 +14,10 @@ Or from source:
 cd ..
 pip install -e .
 ```
+
+Some examples need optional extras:
+- `ximea_stream.py`, `screen_stream.py`, and `360_ptz.py` need the `framesource` package (`pip install "ipycam[camera360]"` or `pip install framesource`)
+- Native (non-go2rtc, non-browser) WebRTC needs `pip install "ipycam[webrtc]"`
 
 Make sure go2rtc is running (usually `go2rtc.exe` or `./go2rtc` in the parent directory).
 
@@ -130,6 +134,42 @@ python 360_ptz.py
 
 **Requirements:**
 - A 360° video file in equirectangular format (place in project root as `360_recording_20251215_215722.mp4` or update the path in the script)
+- The `framesource` package (`pip install "ipycam[camera360]"` or `pip install framesource`)
+
+---
+
+### 8. Ximea Industrial Camera (`ximea_stream.py`)
+Stream from a Ximea industrial camera via the `framesource` backend instead of OpenCV's `VideoCapture`.
+
+```bash
+python ximea_stream.py
+```
+
+**What it demonstrates:**
+- Using `FrameSourceFactory` to connect to a Ximea camera (mono, threaded/async capture)
+- Reading exposure/gain/frame size from the camera before streaming
+- Feeding frames from a non-webcam capture backend into `IPCamera.stream()`
+
+**Requirements:**
+- A connected Ximea camera and its SDK
+- The `framesource` package (`pip install "ipycam[camera360]"` or `pip install framesource`)
+
+---
+
+### 9. Screen Capture (`screen_stream.py`)
+Stream a region of the desktop (screen capture) as a virtual camera.
+
+```bash
+python screen_stream.py
+```
+
+**What it demonstrates:**
+- Using `FrameSourceFactory`'s `screen` backend to capture a region of the screen (position, size, target FPS)
+- Setting `source_type`/`source_info` for the web UI
+- Streaming screen content instead of a physical camera
+
+**Requirements:**
+- The `framesource` package (`pip install "ipycam[camera360]"` or `pip install framesource`)
 
 ---
 

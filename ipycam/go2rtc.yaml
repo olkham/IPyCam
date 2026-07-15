@@ -1,3 +1,13 @@
+# IPyCam go2rtc configuration.
+#
+# Launch go2rtc with THIS file so the RTMP listener (:1935) and the
+# video_main / video_sub streams below exist for IPyCam to push into:
+#
+#     go2rtc --config /path/to/ipycam/go2rtc.yaml
+#
+# Starting go2rtc with an empty/default config (no rtmp listener) is the
+# common cause of "go2rtc not detected" / failed RTMP push -- IPyCam then
+# falls back to its native RTSP/WebRTC path.
 streams:
   video_main: null
   video_sub: null

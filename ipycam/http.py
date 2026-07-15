@@ -4,18 +4,23 @@
 import os
 import re
 import json
+import hmac
+import base64
 import logging
 import http.server
 from typing import Optional, TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote, parse_qs
 from dataclasses import asdict
 
 if TYPE_CHECKING:
     from .camera import IPCamera
 
-# Set up logging for WebRTC module (INFO level by default)
-webrtc_logger = logging.getLogger("ipycam.webrtc")
-webrtc_logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Maximum accepted request body for /api/video/upload. The hand-rolled
+# multipart parser buffers the whole body in memory, so anything larger is
+# rejected with 413 BEFORE the body is read (memory-exhaustion protection).
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 
 
 class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
@@ -25,20 +30,81 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
     
     def log_message(self, format, *args):
         pass  # Suppress logging
-    
+
+    def _check_basic_auth(self) -> bool:
+        """Guard the non-ONVIF surface with optional HTTP Basic auth.
+
+        Returns True immediately when auth is disabled (empty credentials =
+        open mode, unchanged behaviour). Otherwise validates the
+        ``Authorization: Basic <b64>`` header against the configured
+        credentials using constant-time comparisons. On any failure it sends a
+        401 with a ``WWW-Authenticate`` challenge and returns False so the
+        caller can early-return without serving the request.
+        """
+        config = self.camera.config
+        if not config.auth_enabled:
+            return True
+
+        auth_header = self.headers.get('Authorization', '') or ''
+        if auth_header.startswith('Basic '):
+            try:
+                decoded = base64.b64decode(
+                    auth_header[len('Basic '):].strip()
+                ).decode('utf-8')
+                user, sep, pw = decoded.partition(':')
+                # Compare both fields regardless to keep timing uniform.
+                user_ok = hmac.compare_digest(user, config.username)
+                pw_ok = hmac.compare_digest(pw, config.password)
+                if sep and user_ok and pw_ok:
+                    return True
+            except Exception:
+                pass  # Malformed header -> fall through to 401.
+
+        body = b'Unauthorized'
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="IPyCam"')
+        self.send_header('Content-Type', 'text/plain')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
+    def _send_json_error(self, status: int, message: str):
+        """Send a JSON error response.
+
+        `message` must be a client-safe, generic string. Never pass raw
+        exception text/paths here -- log those server-side instead so internal
+        details are not leaked to HTTP clients.
+        """
+        body = json.dumps({'success': False, 'error': message}).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         path = urlparse(self.path).path
-        
+
+        # Static assets are public; everything else below requires auth
+        # (a no-op when credentials are unset).
+        if path.startswith('/static/'):
+            self.serve_static(path)
+            return
+
+        if not self._check_basic_auth():
+            return
+
         if path == '/' or path == '/index.html':
             self.serve_web_ui()
-        elif path.startswith('/static/'):
-            self.serve_static(path)
         elif path == '/api/config':
             self.serve_config()
         elif path == '/api/stats':
             self.serve_stats()
         elif path == '/api/ptz':
             self.serve_ptz_status()
+        elif path == '/api/recording/status':
+            self.serve_recording_status()
         elif path == '/api/video/status':
             self.serve_video_status()
         elif path == f'/{self.camera.config.snapshot_url}':
@@ -50,15 +116,28 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
     
     def do_POST(self):
         path = urlparse(self.path).path
-        
+
+        # ONVIF authenticates via WS-Security inside handle_onvif; the rest of
+        # the POST surface uses HTTP Basic auth (a no-op when creds are unset).
         if path.startswith('/onvif/'):
             self.handle_onvif()
-        elif path == '/api/config':
+            return
+
+        if not self._check_basic_auth():
+            return
+
+        if path == '/api/config':
             self.update_config()
+        elif path == '/api/credentials':
+            self.update_credentials()
         elif path == '/api/ptz':
             self.update_ptz()
         elif path == '/api/restart':
             self.restart_stream()
+        elif path == '/api/recording/start':
+            self.start_recording()
+        elif path == '/api/recording/stop':
+            self.stop_recording()
         elif path == '/api/webrtc/offer':
             self.handle_webrtc_offer()
         elif path == '/api/webrtc/close':
@@ -74,7 +153,22 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')
             soap_action = self.headers.get('SOAPAction', '').strip('"')
-            
+
+            # Enforce WS-Security UsernameToken auth at the HTTP boundary (a
+            # no-op when credentials are unset). Kept here rather than inside
+            # ONVIFService.handle_action so direct handle_action() callers /
+            # tests stay unauthenticated.
+            if not self.camera.onvif.verify_usernametoken(body):
+                fault_bytes = self.camera.onvif.fault(
+                    "Sender not authorized"
+                ).encode('utf-8')
+                self.send_response(401)
+                self.send_header('Content-Type', 'application/soap+xml; charset=utf-8')
+                self.send_header('Content-Length', len(fault_bytes))
+                self.end_headers()
+                self.wfile.write(fault_bytes)
+                return
+
             # Detect action from body if header is missing
             if not soap_action:
                 # Device and Media service actions
@@ -108,8 +202,10 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_error(501, "Not Implemented")
         except Exception as e:
-            print(f"ONVIF Error: {e}")
-            self.send_error(500, str(e))
+            # Log the real error server-side only; clients get a generic 500
+            # so exception text/paths are never leaked.
+            logger.exception(f"ONVIF Error: {e}")
+            self.send_error(500)
     
     def serve_web_ui(self):
         """Serve the configuration web UI"""
@@ -122,19 +218,43 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
     
     def serve_static(self, path: str):
         """Serve static files (CSS, JS)"""
-        # Remove /static/ prefix and sanitize path
-        relative_path = path[8:]  # Remove '/static/'
-        if '..' in relative_path:
+        # Resolve the static directory to a canonical absolute path up front;
+        # every served file must live inside it.
+        static_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), 'static'))
+
+        # Strip the '/static/' prefix and URL-decode so percent-encoded
+        # traversal sequences (e.g. %2e%2e, %2f, %5c) cannot bypass the checks.
+        # Normalise backslashes to forward slashes so Windows separators are
+        # treated consistently on every platform.
+        requested = unquote(path[len('/static/'):]).replace('\\', '/')
+
+        # Reject anything that is not a plain relative path: absolute paths,
+        # leading slashes (POSIX roots / UNC shares) and Windows drive letters
+        # (e.g. "C:/Windows/...") would otherwise cause os.path.join to discard
+        # static_dir entirely and read arbitrary files.
+        if (os.path.isabs(requested)
+                or requested.startswith('/')
+                or (len(requested) >= 2 and requested[1] == ':')):
             self.send_error(403, "Forbidden")
             return
-        
-        static_dir = os.path.join(os.path.dirname(__file__), 'static')
-        file_path = os.path.join(static_dir, relative_path)
-        
+
+        # Resolve the final path and confirm it is contained within static_dir.
+        # realpath collapses any '..' segments; commonpath then verifies
+        # containment. commonpath raises ValueError for paths on different
+        # drives or mixed absolute/relative -- treat that as "outside".
+        file_path = os.path.realpath(os.path.join(static_dir, requested))
+        try:
+            if os.path.commonpath([static_dir, file_path]) != static_dir:
+                self.send_error(403, "Forbidden")
+                return
+        except ValueError:
+            self.send_error(403, "Forbidden")
+            return
+
         if not os.path.isfile(file_path):
             self.send_error(404, "File not found")
             return
-        
+
         # Determine content type
         content_types = {
             '.css': 'text/css',
@@ -146,7 +266,7 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         }
         ext = os.path.splitext(file_path)[1].lower()
         content_type = content_types.get(ext, 'application/octet-stream')
-        
+
         try:
             with open(file_path, 'rb') as f:
                 content = f.read()
@@ -156,19 +276,24 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         except Exception as e:
-            self.send_error(500, str(e))
+            logger.error(f"Static file error: {e}")
+            self.send_error(500)
     
     def serve_config(self):
         """Serve current config as JSON"""
         config_dict = asdict(self.camera.config)
+        # Never expose the stored password over the API.
+        config_dict.pop('password', None)
+        config_dict['auth_enabled'] = self.camera.config.auth_enabled
         # Add computed properties
         config_dict['main_stream_rtsp'] = self.camera.config.main_stream_rtsp
         config_dict['sub_stream_rtsp'] = self.camera.config.sub_stream_rtsp
         config_dict['webrtc_url'] = self.camera.config.webrtc_url
         # Add streaming mode info
         config_dict['streaming_mode'] = self.camera.streaming_mode
-        # Always include full MJPEG URL
-        config_dict['mjpeg_url'] = f"http://{self.camera.config.local_ip}:{self.camera.config.onvif_port}/stream.mjpeg"
+        # Always include full MJPEG URL (use the configured path + the port the
+        # main HTTP server actually listens on).
+        config_dict['mjpeg_url'] = f"http://{self.camera.config.local_ip}:{self.camera.config.onvif_port}/{self.camera.config.mjpeg_url}"
         # Native WebRTC URL (signaling endpoint)
         config_dict['webrtc_native_url'] = f"http://{self.camera.config.local_ip}:{self.camera.config.onvif_port}/api/webrtc/offer"
         config_dict['webrtc_native_available'] = self.camera.webrtc_streamer is not None
@@ -196,6 +321,17 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             'mjpeg_fps': round(mjpeg.actual_fps, 1) if mjpeg else 0,
             'mjpeg_elapsed_time': round(mjpeg.elapsed_time, 1) if mjpeg else 0,
             'mjpeg_clients': mjpeg.client_count if mjpeg else 0,
+        }
+
+        # Recording state (always present; recorder is always constructed).
+        rec = self.camera.recording_stats
+        stats['recording'] = {
+            'recording': rec.get('recording', False),
+            'file': os.path.basename(rec['file']) if rec.get('file') else None,
+            'segments': rec.get('segments', 0),
+            'frames_written': rec.get('frames_written', 0),
+            'dropped': rec.get('dropped', 0),
+            'bytes': rec.get('bytes', 0),
         }
         
         # Add mode-specific stats
@@ -238,13 +374,16 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
     
     def serve_snapshot(self):
         """Serve current frame as JPEG snapshot"""
-        if self.camera._last_frame is not None:
+        # Fetch a thread-safe, independent copy so we never encode a frame that
+        # the capture thread is mutating in place (see IPCamera.stream()).
+        frame = self.camera.get_snapshot_frame()
+        if frame is not None:
             import cv2
-            
+
             # Encode with decent quality
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-            success, jpeg = cv2.imencode('.jpg', self.camera._last_frame, encode_params)
-            
+            success, jpeg = cv2.imencode('.jpg', frame, encode_params)
+
             if success:
                 jpeg_bytes = jpeg.tobytes()
                 self.send_response(200)
@@ -260,28 +399,48 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(503, "No frame available")
     
+    def _get_requested_mjpeg_stream(self) -> str:
+        """Parse the ``?stream=`` query parameter selecting main vs sub.
+
+        Returns 'sub' only when the query parameter is exactly 'sub'
+        (case-insensitive); any other value, or its absence, falls back to
+        'main' rather than erroring -- this is a preview convenience knob,
+        not a validated API contract.
+        """
+        query = parse_qs(urlparse(self.path).query)
+        requested = (query.get('stream', ['main'])[0] or 'main').strip().lower()
+        return requested if requested in ('main', 'sub') else 'main'
+
     def serve_mjpeg_stream(self):
-        """Serve live MJPEG stream (native fallback mode)"""
+        """Serve live MJPEG stream (native fallback mode).
+
+        Supports an optional ``?stream=main|sub`` query parameter so the web
+        UI can preview the lower-resolution sub stream instead of the
+        full-resolution main stream. Defaults to 'main'; any unrecognised
+        value also falls back to 'main'.
+        """
         if not self.camera.mjpeg_streamer:
             self.send_error(503, "MJPEG streaming not available")
             return
-        
+
+        stream = self._get_requested_mjpeg_stream()
+
         try:
             # Send response headers
             self.send_response(200)
             for header_name, header_value in self.camera.mjpeg_streamer.get_headers():
                 self.send_header(header_name, header_value)
             self.end_headers()
-            
-            # Register this client with the MJPEG streamer
-            client = self.camera.mjpeg_streamer.add_client(self.wfile)
-            
-            # Keep connection alive while client is connected
-            # The actual frame writing happens in the camera's stream() method
-            while client.connected and self.camera.is_running:
-                import time
-                time.sleep(0.1)
-                
+
+            # Register this client with the MJPEG streamer and become its
+            # writer: block on the client's own queue and write encoded frames
+            # to this socket. This replaces the old busy-wait sleep loop and
+            # isolates a slow client to its own connection thread (the encode
+            # worker and every other client are unaffected). serve_client
+            # removes the client on return.
+            client = self.camera.mjpeg_streamer.add_client(self.wfile, stream=stream)
+            self.camera.mjpeg_streamer.serve_client(client)
+
         except (BrokenPipeError, ConnectionResetError):
             pass  # Client disconnected
         finally:
@@ -294,59 +453,171 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')
             new_config = json.loads(body)
-            
-            # Apply updates
-            restart_needed = False
-            for key, value in new_config.items():
-                if hasattr(self.camera.config, key):
-                    old_value = getattr(self.camera.config, key)
-                    if old_value != value:
-                        setattr(self.camera.config, key, value)
-                        # Check if this requires a stream restart
-                        if key in ['main_width', 'main_height', 'main_fps', 'main_bitrate',
-                                  'sub_width', 'sub_height', 'sub_bitrate', 'hw_accel']:
-                            restart_needed = True
-            
+
+            # Validate and apply updates (rejects unknown/out-of-range values
+            # instead of blindly setattr-ing them onto the config).
+            applied, rejected, restart_keys = self.camera.config.apply_updates(new_config)
+            restart_needed = len(restart_keys) > 0
+
+            # Recording knobs never restart the stream; instead reconcile the
+            # recorder directly (start/stop the worker for recording_enabled,
+            # pick up pre-record/format changes). Done before the stream
+            # restart below so both can happen in one update.
+            if any(k.startswith('recording_') for k in applied):
+                self.camera.apply_recording_config()
+
             # Auto-restart stream if needed
             restarted = False
             if restart_needed and self.camera.is_running:
                 restarted = self.camera.restart_stream()
-            
-            # Save config to file
-            self.camera.config.save()
-            
+
+            # Save config back to the file it was loaded from
+            saved = self.camera.config.save()
+
             response = {
-                'success': True, 
+                'success': True,
+                'applied': applied,
+                'rejected': rejected,
                 'restart_needed': restart_needed,
-                'restarted': restarted
+                'restarted': restarted,
+                'saved': saved,
             }
-            
+
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode('utf-8'))
-            
+
+        except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as e:
+            # Malformed body / bad JSON from the client. Log the detail
+            # server-side; the response carries only a generic message.
+            logger.warning(f"Config update error: {e}")
+            self._send_json_error(400, 'Invalid request')
         except Exception as e:
-            self.send_response(400)
+            logger.exception(f"Config update error: {e}")
+            self._send_json_error(500, 'Internal server error')
+
+    def update_credentials(self):
+        """Set or clear the HTTP Basic auth / ONVIF WS-Security credential pair.
+
+        A dedicated endpoint because username/password are deliberately NOT
+        in EDITABLE_FIELDS (see CameraConfig.set_credentials / the
+        EDITABLE_FIELDS comment in config.py) -- the generic /api/config path
+        must never be able to change credentials.
+
+        Bootstrapping note: this endpoint sits behind the same
+        _check_basic_auth guard as the rest of do_POST. Once auth is enabled,
+        changing credentials again requires the CURRENT credentials (a 401 is
+        sent before this method ever runs). While auth is disabled, however,
+        anyone who can reach the web UI (e.g. anyone on the LAN) can set the
+        initial credentials -- this open first-run bootstrap is an accepted
+        tradeoff (comparable to a router's unauthenticated first-run setup),
+        not an oversight.
+        """
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(body)
+
+            username = data.get('username', '')
+            password = data.get('password', '')
+
+            ok, error = self.camera.config.set_credentials(username, password)
+            if not ok:
+                self._send_json_error(400, error or 'Invalid credentials')
+                return
+
+            saved = self.camera.config.save()
+
+            response = {
+                'success': True,
+                'auth_enabled': self.camera.config.auth_enabled,
+                'saved': saved,
+            }
+            # NEVER echo the password (or username) back beyond what the
+            # client just sent us -- the response only carries booleans.
+            body_bytes = json.dumps(response).encode('utf-8')
+            self.send_response(200)
             self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body_bytes)))
             self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
-    
+            self.wfile.write(body_bytes)
+
+        except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as e:
+            logger.warning(f"Credentials update error: {e}")
+            self._send_json_error(400, 'Invalid request')
+        except Exception as e:
+            logger.exception(f"Credentials update error: {e}")
+            self._send_json_error(500, 'Internal server error')
+
     def restart_stream(self):
         """Restart the video stream with current config"""
         try:
             success = self.camera.restart_stream()
             response = {'success': success}
-            
+
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode('utf-8'))
         except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            logger.exception(f"Stream restart error: {e}")
+            self._send_json_error(500, 'Internal server error')
+
+    def _write_json(self, status: int, payload: dict):
+        """Serialise ``payload`` as a JSON response with the given status."""
+        body = json.dumps(payload).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def start_recording(self):
+        """Start recording to disk (POST /api/recording/start).
+
+        Returns {success, recording, file}. A bad path / un-openable codec is
+        reported as success=False without leaking internal detail (the recorder
+        logs the specifics server-side).
+        """
+        try:
+            ok = self.camera.start_recording()
+            stats = self.camera.recording_stats
+            self._write_json(200 if ok else 500, {
+                'success': bool(ok),
+                'recording': stats.get('recording', False),
+                'file': stats.get('file'),
+                'error': None if ok else 'Failed to start recording',
+            })
+        except Exception as e:
+            logger.exception(f"Recording start error: {e}")
+            self._send_json_error(500, 'Internal server error')
+
+    def stop_recording(self):
+        """Stop recording (POST /api/recording/stop).
+
+        Returns {success, recording, files} where files are the finalised
+        segment paths (empty if nothing was recording).
+        """
+        try:
+            files = self.camera.stop_recording()
+            self._write_json(200, {
+                'success': True,
+                'recording': self.camera.is_recording,
+                'files': files,
+            })
+        except Exception as e:
+            logger.exception(f"Recording stop error: {e}")
+            self._send_json_error(500, 'Internal server error')
+
+    def serve_recording_status(self):
+        """Return recorder state as JSON (GET /api/recording/status)."""
+        try:
+            stats = self.camera.recording_stats
+            self._write_json(200, {'success': True, **stats})
+        except Exception as e:
+            logger.exception(f"Recording status error: {e}")
+            self._send_json_error(500, 'Internal server error')
 
     def serve_ptz_status(self):
         """Return current PTZ status as JSON"""
@@ -400,11 +671,14 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Length', str(len(response)))
             self.end_headers()
             self.wfile.write(response)
+        except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as e:
+            # Bad JSON / non-numeric values from the client. Log the detail
+            # server-side; the response carries only a generic message.
+            logger.warning(f"PTZ update error: {e}")
+            self._send_json_error(400, 'Invalid request')
         except Exception as e:
-            self.send_response(400)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            logger.exception(f"PTZ update error: {e}")
+            self._send_json_error(500, 'Internal server error')
 
 
     def handle_webrtc_offer(self):
@@ -440,16 +714,14 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(response)))
-            self.send_header('Access-Control-Allow-Origin', '*')
+            # No CORS headers: the web UI is served from this same origin, so
+            # cross-origin access is intentionally not enabled (see do_OPTIONS).
             self.end_headers()
             self.wfile.write(response)
-            
+
         except Exception as e:
-            print(f"WebRTC offer error: {e}")
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            logger.exception(f"WebRTC offer error: {e}")
+            self._send_json_error(500, 'Internal server error')
 
     def handle_webrtc_close(self):
         """Close WebRTC connections"""
@@ -463,12 +735,10 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Length', str(len(response)))
             self.end_headers()
             self.wfile.write(response)
-            
+
         except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            logger.exception(f"WebRTC close error: {e}")
+            self._send_json_error(500, 'Internal server error')
 
     def serve_video_status(self):
         """Serve video upload mode status as JSON"""
@@ -524,7 +794,17 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             
             boundary = boundary_match.group(1).strip('"')
             content_length = int(self.headers.get('Content-Length', 0))
-            
+
+            # Bound the request size BEFORE reading anything: the multipart
+            # parser below buffers the entire body in memory, so an unbounded
+            # Content-Length is a memory-exhaustion DoS vector.
+            if content_length > MAX_UPLOAD_BYTES:
+                self._send_json_error(
+                    413,
+                    f'Upload too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)'
+                )
+                return
+
             # Read the entire body
             body = self.rfile.read(content_length)
             
@@ -593,7 +873,7 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             with open(filepath, 'wb') as f:
                 f.write(video_data)
             
-            print(f"  Video uploaded: {final_filename} ({len(video_data)} bytes)")
+            logger.info(f"  Video uploaded: {final_filename} ({len(video_data)} bytes)")
             
             # Set the new video path - the main loop will pick it up
             previous_video = self.camera.get_current_video_path()
@@ -614,19 +894,19 @@ class IPCameraHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(response)
             
         except Exception as e:
-            print(f"Video upload error: {e}")
-            import traceback
-            traceback.print_exc()
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            # Full details go to the server log only; the client gets a
+            # generic error.
+            logger.exception(f"Video upload error: {e}")
+            self._send_json_error(500, 'Internal server error')
 
     def do_OPTIONS(self):
-        """Handle CORS preflight requests"""
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.send_header('Access-Control-Max-Age', '86400')
+        """Handle OPTIONS requests.
+
+        Deliberately emits NO Access-Control-Allow-* headers: the web UI is
+        served from the same origin as this API, so it never needs CORS, and a
+        wildcard allow-origin would let arbitrary websites drive the camera
+        API from a visitor's browser (CSRF-style).
+        """
+        self.send_response(204)
+        self.send_header('Allow', 'GET, POST, OPTIONS')
         self.end_headers()

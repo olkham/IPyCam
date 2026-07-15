@@ -101,6 +101,23 @@ h2 {
     color: #888;
 }
 
+/* Local recording toggle (step 4.4): idle shows a red dot; active pulses. */
+.btn-record {
+    color: #e94560;
+}
+
+.btn-record.recording-active {
+    background: #e94560;
+    color: #fff;
+    border-radius: 6px;
+    animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
 /* Stream Mode Indicator */
 .stream-mode-indicator {
     font-size: 10px;
@@ -123,6 +140,17 @@ h2 {
 .stream-mode-indicator.mode-mjpeg {
     background: rgba(255, 170, 0, 0.2);
     color: #ffaa00;
+}
+
+/* Resolution readout for the active preview -- shows the actual served
+   dimensions (MJPEG naturalWidth or WebRTC videoWidth) for the current main/sub
+   selection, since the preview is CSS-scaled and can't visually reveal a
+   resolution change on its own. */
+.resolution-indicator {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ccc;
+    font-family: 'Courier New', monospace;
+    text-transform: none;
 }
 
 /* PTZ Controls */
@@ -442,14 +470,112 @@ select:focus {
     gap: 10px;
 }
 
+/* Settings Tabs (paged settings: Display / Stream / Identity / User) */
+.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    background: #0f3460;
+    border-radius: 8px;
+    padding: 4px;
+    margin-bottom: 20px;
+}
+
+.tab-btn {
+    flex: 1 1 auto;
+    background: transparent;
+    color: #888;
+    border: none;
+    padding: 10px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: bold;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.tab-btn:hover {
+    color: #fff;
+    background: rgba(0, 212, 255, 0.15);
+}
+
+.tab-btn.active {
+    background: #00d4ff;
+    color: #000;
+}
+
+.tab-panel {
+    display: none;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+.tab-panel h3 {
+    color: #00d4ff;
+    font-size: 1em;
+    margin: 20px 0 10px;
+}
+
+.tab-panel h3:first-child {
+    margin-top: 0;
+}
+
+.readonly-tag {
+    font-size: 0.7em;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: normal;
+    margin-left: 6px;
+}
+
+input:disabled,
+select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.settings-hint {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 15px;
+    line-height: 1.5;
+}
+
+.auth-state {
+    margin-bottom: 15px;
+    font-size: 13px;
+    color: #ccc;
+}
+
+.settings-status {
+    margin-left: 10px;
+    color: #888;
+    font-size: 13px;
+    display: inline-block;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .grid {
         grid-template-columns: 1fr;
     }
-    
+
     .stats {
         grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 480px) {
+    .tabs {
+        flex-direction: column;
+    }
+
+    .tab-btn {
+        text-align: left;
     }
 }
 

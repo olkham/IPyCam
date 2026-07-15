@@ -5,6 +5,11 @@ import os
 import re
 import time
 import uuid
+import base64
+import hashlib
+import hmac
+from datetime import datetime, timezone
+from xml.sax.saxutils import escape
 from typing import Dict, Optional, TYPE_CHECKING
 
 try:
@@ -17,6 +22,93 @@ if TYPE_CHECKING:
         from .ptz import PTZController
     except ImportError:
         from ptz import PTZController
+
+
+# Maximum tolerated clock skew (seconds) for a WS-Security Created timestamp.
+WSU_MAX_SKEW_SECONDS = 300
+
+
+def _ws_extract(soap_body: str, tag: str) -> Optional[str]:
+    """Extract the text of a WS-Security element, tolerant of ns prefixes."""
+    pattern = rf'<(?:\w+:)?{tag}\b[^>]*>([^<]*)</(?:\w+:)?{tag}>'
+    match = re.search(pattern, soap_body)
+    return match.group(1) if match else None
+
+
+def _ws_extract_attr(soap_body: str, tag: str, attr: str) -> Optional[str]:
+    """Extract an attribute value from a WS-Security element (ns tolerant)."""
+    pattern = rf'<(?:\w+:)?{tag}\b[^>]*\b{attr}="([^"]*)"'
+    match = re.search(pattern, soap_body)
+    return match.group(1) if match else None
+
+
+def compute_password_digest(nonce_b64: str, created: str, password: str) -> str:
+    """PasswordDigest = Base64( SHA1( Base64Decode(Nonce) + Created + Password ) ).
+
+    Created and Password are encoded as UTF-8. Nonce is the raw bytes obtained
+    by base64-decoding the wire value.
+    """
+    nonce = base64.b64decode(nonce_b64)
+    digest = hashlib.sha1(
+        nonce + created.encode('utf-8') + password.encode('utf-8')
+    ).digest()
+    return base64.b64encode(digest).decode('ascii')
+
+
+def _created_within_skew(created: str, max_skew: int = WSU_MAX_SKEW_SECONDS) -> bool:
+    """Return True if the Created timestamp is within max_skew of now (UTC).
+
+    Best-effort: an unparseable timestamp is not treated as an auth failure
+    (the digest/nonce still have to match), it just skips the freshness check.
+    """
+    try:
+        ts = created.strip()
+        if ts.endswith('Z'):
+            ts = ts[:-1] + '+00:00'
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return abs((now - dt).total_seconds()) <= max_skew
+    except Exception:
+        return True
+
+
+def verify_ws_username_token(soap_body: str, username: str, password: str) -> bool:
+    """Verify a WS-Security UsernameToken carried in a SOAP header.
+
+    Supports PasswordDigest (the ONVIF default) and, as a fallback for clients
+    that send it, PasswordText. Returns False when the token is absent or does
+    not match. Pure and unit-testable: it performs no auth-enabled check, so
+    callers must short-circuit when authentication is disabled.
+
+    Comparisons use hmac.compare_digest to avoid timing side channels.
+    """
+    token_user = _ws_extract(soap_body, 'Username')
+    token_pass = _ws_extract(soap_body, 'Password')
+    if token_user is None or token_pass is None:
+        return False
+
+    user_ok = hmac.compare_digest(token_user, username)
+
+    pw_type = _ws_extract_attr(soap_body, 'Password', 'Type') or ''
+    if 'PasswordText' in pw_type:
+        pass_ok = hmac.compare_digest(token_pass, password)
+        return user_ok and pass_ok
+
+    # Default: PasswordDigest (also assumed when Type is omitted).
+    nonce_b64 = _ws_extract(soap_body, 'Nonce')
+    created = _ws_extract(soap_body, 'Created')
+    if nonce_b64 is None or created is None:
+        return False
+    if not _created_within_skew(created):
+        return False
+    try:
+        expected = compute_password_digest(nonce_b64, created, password)
+    except Exception:
+        return False
+    pass_ok = hmac.compare_digest(expected, token_pass)
+    return user_ok and pass_ok
 
 
 class ONVIFService:
@@ -88,7 +180,22 @@ class ONVIFService:
         return self.fault(f"Action not supported: {action}")
     
     def fault(self, reason: str) -> str:
-        return self._render('fault', reason=reason)
+        # Reasons can echo request-derived text (e.g. an unknown SOAPAction),
+        # so escape to keep the fault XML well-formed and injection-free.
+        return self._render('fault', reason=escape(reason))
+
+    def verify_usernametoken(self, soap_body: str) -> bool:
+        """Verify the ONVIF WS-Security UsernameToken for a SOAP request.
+
+        Returns True unconditionally when authentication is disabled (open
+        mode) so existing behaviour is preserved. Otherwise delegates to the
+        pure verifier against the configured credentials.
+        """
+        if not self.config.auth_enabled:
+            return True
+        return verify_ws_username_token(
+            soap_body, self.config.username, self.config.password
+        )
 
     def _bitrate_to_kbps(self, bitrate: str) -> int:
         """Convert bitrate string like '4M' or '512K' to kbps"""
@@ -106,11 +213,13 @@ class ONVIFService:
         return self._wrap_envelope(body)
 
     def get_device_information(self) -> str:
+        # These identity strings are config/user-controlled (editable via the
+        # web API), so XML-escape them before template substitution.
         body = self._render('get_device_information',
-            manufacturer=self.config.manufacturer,
-            model=self.config.model,
-            firmware_version=self.config.firmware_version,
-            serial_number=self.config.serial_number)
+            manufacturer=escape(str(self.config.manufacturer)),
+            model=escape(str(self.config.model)),
+            firmware_version=escape(str(self.config.firmware_version)),
+            serial_number=escape(str(self.config.serial_number)))
         return self._wrap_envelope(body)
 
     def get_capabilities(self) -> str:
@@ -128,11 +237,14 @@ class ONVIFService:
         return self._wrap_envelope(body)
 
     def get_scopes(self) -> str:
-        body = self._render('get_scopes', camera_name=self.config.name)
+        body = self._render('get_scopes', camera_name=escape(str(self.config.name)))
         return self._wrap_envelope(body)
 
     def get_users(self) -> str:
-        body = self._render('get_users')
+        # Reflect the configured user when auth is enabled; otherwise keep the
+        # previous static 'admin' response. Escape for safe XML substitution.
+        username = self.config.username if self.config.auth_enabled else 'admin'
+        body = self._render('get_users', username=escape(username))
         return self._wrap_envelope(body)
 
     def get_profiles(self) -> str:
@@ -151,12 +263,16 @@ class ONVIFService:
         uri = self.config.main_stream_rtsp
         if "Sub" in body or "Profile_2" in body:
             uri = self.config.sub_stream_rtsp
-        body = self._render('get_stream_uri', stream_uri=uri)
+        # Stream names inside the URI are config-editable; escape for XML.
+        body = self._render('get_stream_uri', stream_uri=escape(uri))
         return self._wrap_envelope(body)
 
     def get_snapshot_uri(self, body: str) -> str:
-        uri = f"http://{self.config.local_ip}:{self.config.web_port}/{self.config.snapshot_url}"
-        body = self._render('get_snapshot_uri', snapshot_uri=uri)
+        # Advertise onvif_port: the snapshot is served by the main HTTP server
+        # (which listens on onvif_port). Nothing binds web_port, so the old URL
+        # pointed at a dead port.
+        uri = f"http://{self.config.local_ip}:{self.config.onvif_port}/{self.config.snapshot_url}"
+        body = self._render('get_snapshot_uri', snapshot_uri=escape(uri))
         return self._wrap_envelope(body)
 
     def get_video_encoder_configuration(self) -> str:
@@ -182,10 +298,10 @@ class ONVIFService:
         message_id = f"urn:uuid:{uuid.uuid4()}"
         return self._render('probe_match',
             message_id=message_id,
-            relates_to=relates_to,
+            relates_to=escape(str(relates_to)),
             device_uuid=self.device_uuid,
-            camera_name=self.config.name,
-            onvif_url=self.config.onvif_url)
+            camera_name=escape(str(self.config.name)),
+            onvif_url=escape(self.config.onvif_url))
 
     # === PTZ Service Handlers ===
     
@@ -378,9 +494,14 @@ class ONVIFService:
         if self.ptz:
             presets = self.ptz.get_presets()
             for token, preset in presets.items():
+                # Token and name originate from client SetPreset requests --
+                # escape them so they cannot inject markup into the response.
+                # The token sits in an attribute, so quotes must be escaped too.
+                safe_token = escape(str(preset.token), {'"': '&quot;'})
+                safe_name = escape(str(preset.name))
                 preset_items += f"""
-      <tptz:Preset token="{preset.token}">
-        <tt:Name>{preset.name}</tt:Name>
+      <tptz:Preset token="{safe_token}">
+        <tt:Name>{safe_name}</tt:Name>
         <tt:PTZPosition>
           <tt:PanTilt x="{preset.pan}" y="{preset.tilt}"/>
           <tt:Zoom x="{preset.zoom}"/>
@@ -401,8 +522,9 @@ class ONVIFService:
         
         if self.ptz:
             self.ptz.set_preset(preset_token, preset_name)
-        
-        response = self._render('ptz_set_preset', preset_token=preset_token)
+
+        # The token may be client-supplied; escape it before echoing it back.
+        response = self._render('ptz_set_preset', preset_token=escape(preset_token))
         return self._wrap_envelope(response)
     
     def ptz_goto_preset(self, body: str) -> str:
